@@ -198,6 +198,9 @@ class User(UserMixin, db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+VISIBILITY_PRIVATE = 'private'
+VISIBILITY_PUBLIC = 'public'
+
 class Memory(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -211,6 +214,8 @@ class Memory(db.Model):
     logo_filename = db.Column(db.String(200), nullable=True)
     bg_filename = db.Column(db.String(200), nullable=True)
     status = db.Column(db.String(20), default=MEMORY_STATUS_ACTIVE, nullable=False)
+    unlock_time = db.Column(db.DateTime, nullable=True)
+    visibility = db.Column(db.String(20), default=VISIBILITY_PRIVATE, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -220,26 +225,59 @@ class Memory(db.Model):
     def set_design_config(self, config):
         self.design_config = json.dumps(config)
 
-    def to_dict(self):
+    def is_locked(self):
+        if not self.unlock_time:
+            return False
+        return datetime.utcnow() < self.unlock_time
+
+    def can_view(self, user=None):
+        if self.visibility == VISIBILITY_PUBLIC:
+            return True
+        if user and user.is_authenticated and user.id == self.user_id:
+            return True
+        return False
+
+    def to_dict(self, viewer=None):
         design_config = self.get_design_config()
-        return {
+        locked = self.is_locked()
+        can_view = self.can_view(viewer)
+
+        result = {
             'id': self.id,
             'title': self.title,
-            'text_content': self.text_content,
-            'media_url': f'/static/uploads/{self.media_filename}' if self.media_filename else None,
-            'media_type': self.media_type,
-            'qr_url': f'/static/qrcodes/{self.qr_filename}' if self.qr_filename else None,
-            'qr_quality_score': self.qr_quality_score or 0,
-            'design_config': design_config,
-            'logo_url': f'/static/qrcodes/{self.logo_filename}' if self.logo_filename else None,
-            'bg_url': f'/static/qrcodes/{self.bg_filename}' if self.bg_filename else None,
             'status': self.status,
+            'visibility': self.visibility,
+            'unlock_time': self.unlock_time.strftime('%Y-%m-%d %H:%M:%S') if self.unlock_time else None,
+            'is_locked': locked,
+            'can_view': can_view,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
             'author': self.author.username,
+            'author_id': self.user_id,
             'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}',
             'full_view_url': build_view_url(self.id)
         }
+
+        if not locked and can_view:
+            result['text_content'] = self.text_content
+            result['media_url'] = f'/static/uploads/{self.media_filename}' if self.media_filename else None
+            result['media_type'] = self.media_type
+            result['qr_url'] = f'/static/qrcodes/{self.qr_filename}' if self.qr_filename else None
+            result['qr_quality_score'] = self.qr_quality_score or 0
+            result['design_config'] = design_config
+            result['logo_url'] = f'/static/qrcodes/{self.logo_filename}' if self.logo_filename else None
+            result['bg_url'] = f'/static/qrcodes/{self.bg_filename}' if self.bg_filename else None
+        else:
+            result['text_content'] = None
+            result['media_url'] = None
+            result['media_type'] = None
+            result['qr_url'] = None
+            result['qr_quality_score'] = 0
+            result['design_config'] = {}
+            result['logo_url'] = None
+            result['bg_url'] = None
+
+        return result
 
 class OperationLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -358,7 +396,20 @@ def get_memories():
         query = query.filter_by(status=status_filter)
     memories = query.order_by(Memory.created_at.desc()).all()
     log_operation('list_memories', f'Listed {len(memories)} memories')
-    return jsonify([m.to_dict() for m in memories])
+    return jsonify([m.to_dict(viewer=current_user) for m in memories])
+
+def parse_unlock_time(time_str):
+    if not time_str:
+        return None
+    try:
+        for fmt in ['%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M']:
+            try:
+                return datetime.strptime(time_str, fmt)
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
 
 @app.route('/api/memories', methods=['POST'])
 @login_required
@@ -367,9 +418,16 @@ def create_memory():
     text = request.form.get('text', '').strip()
     file = request.files.get('file')
     status = request.form.get('status', MEMORY_STATUS_ACTIVE)
+    unlock_time_str = request.form.get('unlock_time', '')
+    visibility = request.form.get('visibility', VISIBILITY_PRIVATE)
 
     if status not in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
         status = MEMORY_STATUS_ACTIVE
+
+    if visibility not in [VISIBILITY_PRIVATE, VISIBILITY_PUBLIC]:
+        visibility = VISIBILITY_PRIVATE
+
+    unlock_time = parse_unlock_time(unlock_time_str)
 
     if not title:
         return jsonify({'success': False, 'message': 'Title is required'}), 400
@@ -406,6 +464,8 @@ def create_memory():
             media_filename=media_filename,
             media_type=media_type,
             status=status,
+            unlock_time=unlock_time,
+            visibility=visibility,
             author=current_user
         )
         db.session.add(memory)
@@ -418,16 +478,22 @@ def create_memory():
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
 
 @app.route('/api/memories/<memory_id>', methods=['GET'])
-@login_required
 def get_memory(memory_id):
     memory = Memory.query.get_or_404(memory_id)
-    if memory.user_id != current_user.id:
+    
+    if memory.is_locked():
+        log_operation('view_locked_memory', f'Attempted to view locked memory: {memory.title}', memory_id=memory.id)
+        return jsonify(memory.to_dict(viewer=current_user if current_user.is_authenticated else None))
+    
+    if not memory.can_view(current_user if current_user.is_authenticated else None):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': 'Please login'}), 401
         app.logger.warning(f"Unauthorized access attempt to memory {memory_id} by user {current_user.username}")
         log_operation('unauthorized_access', f'Attempted to access memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
 
     log_operation('view_memory', f'Viewed memory: {memory.title}', memory_id=memory.id)
-    return jsonify(memory.to_dict())
+    return jsonify(memory.to_dict(viewer=current_user if current_user.is_authenticated else None))
 
 @app.route('/api/memories/<memory_id>', methods=['PUT'])
 @login_required
@@ -442,6 +508,8 @@ def update_memory(memory_id):
     file = request.files.get('file')
     remove_media = request.form.get('remove_media', 'false').lower() == 'true'
     new_status = request.form.get('status', '')
+    unlock_time_str = request.form.get('unlock_time', '')
+    visibility = request.form.get('visibility', '')
 
     if title:
         if len(title) > MAX_TITLE_LENGTH:
@@ -455,6 +523,17 @@ def update_memory(memory_id):
 
     if new_status and new_status in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
         memory.status = new_status
+
+    if unlock_time_str is not None:
+        if unlock_time_str == '':
+            memory.unlock_time = None
+        else:
+            parsed = parse_unlock_time(unlock_time_str)
+            if parsed:
+                memory.unlock_time = parsed
+
+    if visibility and visibility in [VISIBILITY_PRIVATE, VISIBILITY_PUBLIC]:
+        memory.visibility = visibility
 
     if remove_media and memory.media_filename:
         old_file = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
@@ -490,7 +569,7 @@ def update_memory(memory_id):
         db.session.commit()
         app.logger.info(f"Memory updated: {memory.id} by user {current_user.username}")
         log_operation('update_memory', f'Updated memory: {memory.title}', memory_id=memory.id)
-        return jsonify({'success': True, 'memory': memory.to_dict()})
+        return jsonify({'success': True, 'memory': memory.to_dict(viewer=current_user)})
     except Exception as e:
         app.logger.error(f"Error updating memory: {str(e)}")
         db.session.rollback()
@@ -516,6 +595,23 @@ def update_memory_status(memory_id):
 
     log_operation('status_change', f'Status changed from {old_status} to {new_status}', memory_id=memory.id)
     return jsonify({'success': True, 'status': new_status})
+
+@app.route('/api/capsules', methods=['GET'])
+def get_capsules():
+    query = Memory.query.filter(
+        Memory.status == MEMORY_STATUS_ACTIVE,
+        Memory.unlock_time.isnot(None)
+    )
+    
+    capsules = query.order_by(Memory.unlock_time.asc()).all()
+    
+    viewer = current_user if current_user.is_authenticated else None
+    result = []
+    for c in capsules:
+        if c.visibility == VISIBILITY_PUBLIC or (viewer and viewer.id == c.user_id):
+            result.append(c.to_dict(viewer=viewer))
+    
+    return jsonify(result)
 
 @app.route('/api/memories/<memory_id>', methods=['DELETE'])
 @login_required
@@ -830,17 +926,13 @@ def decode_qr():
 
             log_operation('decode_success', f'Successfully decoded memory: {memory.title}', memory_id=memory_id, ip=request.remote_addr)
 
-            if not current_user.is_authenticated:
-                view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
-                return jsonify({
-                    'success': False,
-                    'error': 'auth_required',
-                    'memory_id': memory.id,
-                    'redirect_url': view_url,
-                    'message': 'Please login to view this memory'
-                }), 401
-
-            return jsonify({'success': True, 'memory_id': memory.id, 'view_url': app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id})
+            view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
+            return jsonify({
+                'success': True,
+                'memory_id': memory.id,
+                'view_url': view_url,
+                'is_locked': memory.is_locked()
+            })
         else:
             log_operation('decode_invalid', f'Decoded invalid memory ID: {memory_id}', ip=request.remote_addr)
             return jsonify({'success': False, 'message': 'Invalid QR Code'}), 404
@@ -857,20 +949,13 @@ def scan_memory(memory_id):
 
     log_operation('qr_scan', f'QR code scanned for memory: {memory.title}', memory_id=memory_id, ip=request.remote_addr)
 
-    if not current_user.is_authenticated:
-        view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
-        login_url = '/login.html?redirect=' + view_url
-        return jsonify({
-            'success': False,
-            'error': 'auth_required',
-            'login_url': login_url,
-            'memory_id': memory.id
-        }), 401
-
-    if memory.user_id != current_user.id:
-        return jsonify({'success': False, 'message': 'Access denied'}), 403
-
-    return jsonify({'success': True, 'memory_id': memory.id})
+    view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
+    return jsonify({
+        'success': True,
+        'memory_id': memory.id,
+        'view_url': view_url,
+        'is_locked': memory.is_locked()
+    })
 
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'src')
 
@@ -971,6 +1056,24 @@ def init_db():
                 app.logger.info("Added 'bg_filename' column to memory table")
             except Exception as e:
                 app.logger.warning(f"Could not add bg_filename column: {e}")
+
+        if 'unlock_time' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN unlock_time DATETIME"))
+                    conn.commit()
+                app.logger.info("Added 'unlock_time' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add unlock_time column: {e}")
+
+        if 'visibility' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN visibility VARCHAR(20) DEFAULT 'private' NOT NULL"))
+                    conn.commit()
+                app.logger.info("Added 'visibility' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add visibility column: {e}")
 
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():

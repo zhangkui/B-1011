@@ -92,6 +92,54 @@
                             </div>
                         </div>
                     </div>
+
+                    <div class="mb-8 glass p-6 rounded-xl border border-cyber-neon/20">
+                        <div class="flex items-center gap-2 mb-4">
+                            <svg class="w-5 h-5 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            <h3 class="text-lg font-bold">时光胶囊设置</h3>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-6">设置未来开启时间，到期前任何人都无法查看内容。</p>
+
+                        <div class="mb-4">
+                            <label class="block text-gray-400 text-sm font-bold mb-2" for="unlock_time">
+                                <input type="checkbox" id="enable_unlock_time" class="mr-2 rounded">
+                                启用定时解锁
+                            </label>
+                            <input 
+                                class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light disabled:opacity-50 disabled:cursor-not-allowed" 
+                                type="datetime-local" 
+                                id="unlock_time" 
+                                name="unlock_time"
+                                disabled>
+                            <p class="text-xs text-gray-500 mt-2">在该时间之前，内容将被完全锁定，包括您本人也无法查看。</p>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="block text-gray-400 text-sm font-bold mb-2">可见性（到期后）</label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <label class="flex items-start gap-3 p-4 rounded-lg border border-gray-700 cursor-pointer hover:border-cyber-light transition has-[:checked]:border-cyber-light has-[:checked]:bg-cyber-light/5">
+                                    <input type="radio" name="visibility" value="private" class="mt-1" checked>
+                                    <div>
+                                        <div class="font-bold text-sm flex items-center gap-1">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                                            私有
+                                        </div>
+                                        <div class="text-xs text-gray-500 mt-1">仅您自己可查看</div>
+                                    </div>
+                                </label>
+                                <label class="flex items-start gap-3 p-4 rounded-lg border border-gray-700 cursor-pointer hover:border-cyber-neon transition has-[:checked]:border-cyber-neon has-[:checked]:bg-cyber-neon/5">
+                                    <input type="radio" name="visibility" value="public" class="mt-1">
+                                    <div>
+                                        <div class="font-bold text-sm flex items-center gap-1 text-cyber-neon">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                                            公开
+                                        </div>
+                                        <div class="text-xs text-gray-500 mt-1">所有人都可查看</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
                     
                     <button class="w-full bg-cyber-light text-cyber-dark font-bold py-3 px-4 rounded-lg hover:bg-blue-400 transition" type="submit">
                         下一步：设计二维码 &rarr;
@@ -165,9 +213,27 @@
             preview.classList.remove('hidden');
         }
 
+        const enableUnlockTime = document.getElementById('enable_unlock_time');
+        const unlockTimeInput = document.getElementById('unlock_time');
+
+        enableUnlockTime.addEventListener('change', function() {
+            unlockTimeInput.disabled = !this.checked;
+            if (this.checked && !unlockTimeInput.value) {
+                const now = new Date();
+                now.setDate(now.getDate() + 1);
+                now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                unlockTimeInput.value = now.toISOString().slice(0, 16);
+            }
+        });
+
         document.getElementById('create-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
+            
+            if (!enableUnlockTime.checked) {
+                formData.delete('unlock_time');
+            }
+
             try {
                 const res = await fetch('/api/memories', {
                     method: 'POST',
@@ -177,7 +243,8 @@
                     const data = await res.json();
                     window.location.href = `/design.html?id=${data.id}`;
                 } else {
-                    alert('创建失败，请重试');
+                    const data = await res.json().catch(() => ({}));
+                    alert(data.message || '创建失败，请重试');
                 }
             } catch (err) {
                 console.error(err);
