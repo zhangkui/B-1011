@@ -3,6 +3,7 @@ import uuid
 import logging
 import magic
 import re
+import json
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, abort, url_for
@@ -10,11 +11,16 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-import segno
 from PIL import Image
 import cv2
 import numpy as np
 from flask_cors import CORS
+
+from qr_generator import (
+    QR_TEMPLATES, EXPORT_SIZES, generate_qr_full,
+    generate_export_variants, assess_qr_readability,
+    validate_hex_color
+)
 
 # Initialize App
 app = Flask(__name__)
@@ -24,6 +30,7 @@ app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['QR_FOLDER'] = os.path.join('static', 'qrcodes')
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024  # 64MB max limit
 app.config['MEMORY_VIEW_URL'] = '/view_memory.html'
+app.config['BASE_URL'] = os.environ.get('BASE_URL', '')
 
 # Constants for Validation
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mov', 'avi'}
@@ -120,6 +127,23 @@ def is_safe_redirect_url(target):
         return True
     return False
 
+def get_base_url():
+    base_url = app.config.get('BASE_URL', '')
+    if base_url:
+        return base_url.rstrip('/')
+    return request.host_url.rstrip('/')
+
+def build_view_url(memory_id):
+    return get_base_url() + app.config['MEMORY_VIEW_URL'] + '?id=' + memory_id
+
+def safe_json_loads(s, default=None):
+    if not s:
+        return default or {}
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return default or {}
+
 def log_operation(action, detail='', user_id=None, memory_id=None, ip=None):
     try:
         log = OperationLog(
@@ -181,11 +205,20 @@ class Memory(db.Model):
     media_filename = db.Column(db.String(200), nullable=True)
     media_type = db.Column(db.String(20), nullable=True)
     qr_filename = db.Column(db.String(200), nullable=True)
+    qr_quality_score = db.Column(db.Integer, default=0)
+    design_config = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(20), default=MEMORY_STATUS_ACTIVE, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    def get_design_config(self):
+        return safe_json_loads(self.design_config, {})
+
+    def set_design_config(self, config):
+        self.design_config = json.dumps(config)
+
     def to_dict(self):
+        design_config = self.get_design_config()
         return {
             'id': self.id,
             'title': self.title,
@@ -193,11 +226,14 @@ class Memory(db.Model):
             'media_url': f'/static/uploads/{self.media_filename}' if self.media_filename else None,
             'media_type': self.media_type,
             'qr_url': f'/static/qrcodes/{self.qr_filename}' if self.qr_filename else None,
+            'qr_quality_score': self.qr_quality_score or 0,
+            'design_config': design_config,
             'status': self.status,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
             'author': self.author.username,
-            'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}'
+            'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}',
+            'full_view_url': build_view_url(self.id)
         }
 
 class OperationLog(db.Model):
@@ -509,6 +545,34 @@ def delete_memory(memory_id):
         db.session.rollback()
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
 
+@app.route('/api/qr/templates', methods=['GET'])
+def get_qr_templates():
+    templates = []
+    for key, tpl in QR_TEMPLATES.items():
+        templates.append({
+            'id': key,
+            'name': tpl['name'],
+            'dark': tpl['dark'],
+            'light': tpl['light'],
+            'finder_dark': tpl.get('finder_dark', tpl['dark']),
+            'finder_light': tpl.get('finder_light', tpl['light']),
+            'corner_style': tpl.get('corner_style', 'square'),
+            'dot_style': tpl.get('dot_style', 'square'),
+        })
+    return jsonify({'success': True, 'templates': templates})
+
+@app.route('/api/qr/export-sizes', methods=['GET'])
+def get_export_sizes():
+    sizes = []
+    for key, sz in EXPORT_SIZES.items():
+        sizes.append({
+            'id': key,
+            'name': sz['name'],
+            'scale': sz['scale'],
+            'margin': sz['margin'],
+        })
+    return jsonify({'success': True, 'sizes': sizes})
+
 @app.route('/api/memories/<memory_id>/design', methods=['POST'])
 @login_required
 def design_qr(memory_id):
@@ -517,85 +581,189 @@ def design_qr(memory_id):
         log_operation('unauthorized_qr_design', f'Attempted to design QR for memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
 
-    color = request.form.get('color', '#000000')
-    bg_color = request.form.get('bg_color', '#ffffff')
+    template = request.form.get('template', 'classic')
+    dark_color = request.form.get('dark_color', '')
+    light_color = request.form.get('light_color', '')
+    finder_dark = request.form.get('finder_dark', '')
+    finder_light = request.form.get('finder_light', '')
+    dot_style = request.form.get('dot_style', '')
+    corner_style = request.form.get('corner_style', '')
+    size_type = request.form.get('size_type', 'standard')
+
+    logo_shape = request.form.get('logo_shape', 'square')
+    logo_radius = int(request.form.get('logo_radius', 0) or 0)
+    logo_border_width = int(request.form.get('logo_border_width', 0) or 0)
+    logo_border_color = request.form.get('logo_border_color', '#ffffff')
+    logo_opacity = int(request.form.get('logo_opacity', 100) or 100)
+    logo_padding = int(request.form.get('logo_padding', 8) or 8)
+
     bg_file = request.files.get('bg_image')
     logo_file = request.files.get('logo_image')
 
-    # Validate color format
-    if not re.match(r'^#[0-9A-Fa-f]{6}$', color):
-        return jsonify({'success': False, 'message': 'Invalid color format'}), 400
-    if not re.match(r'^#[0-9A-Fa-f]{6}$', bg_color):
-        return jsonify({'success': False, 'message': 'Invalid background color format'}), 400
+    if template not in QR_TEMPLATES:
+        template = 'classic'
 
-    # Validate background image if provided
+    tpl = QR_TEMPLATES[template]
+    if not dark_color:
+        dark_color = tpl['dark']
+    if not light_color:
+        light_color = tpl['light']
+    if not finder_dark:
+        finder_dark = tpl.get('finder_dark', tpl['dark'])
+    if not finder_light:
+        finder_light = tpl.get('finder_light', tpl['light'])
+    if not dot_style:
+        dot_style = tpl.get('dot_style', 'square')
+    if not corner_style:
+        corner_style = tpl.get('corner_style', 'square')
+
+    if not validate_hex_color(dark_color):
+        return jsonify({'success': False, 'message': 'Invalid dark color format'}), 400
+    if not validate_hex_color(light_color):
+        return jsonify({'success': False, 'message': 'Invalid light color format'}), 400
+    if finder_dark and not validate_hex_color(finder_dark):
+        return jsonify({'success': False, 'message': 'Invalid finder dark color format'}), 400
+    if finder_light and not validate_hex_color(finder_light):
+        return jsonify({'success': False, 'message': 'Invalid finder light color format'}), 400
+    if logo_border_color and not validate_hex_color(logo_border_color):
+        return jsonify({'success': False, 'message': 'Invalid logo border color format'}), 400
+
+    if dot_style not in ['square', 'rounded', 'circle']:
+        dot_style = 'square'
+    if corner_style not in ['square', 'rounded']:
+        corner_style = 'square'
+    if logo_shape not in ['square', 'rounded', 'circle']:
+        logo_shape = 'square'
+
+    logo_radius = max(0, min(logo_radius, 100))
+    logo_border_width = max(0, min(logo_border_width, 20))
+    logo_opacity = max(0, min(logo_opacity, 100))
+    logo_padding = max(0, min(logo_padding, 50))
+
     if bg_file and bg_file.filename:
         is_valid, err_msg = allowed_file(bg_file.filename, bg_file)
         if not is_valid:
             return jsonify({'success': False, 'message': f'Background image: {err_msg}'}), 400
 
-    # Validate logo image if provided
     if logo_file and logo_file.filename:
         is_valid, err_msg = allowed_file(logo_file.filename, logo_file)
         if not is_valid:
             return jsonify({'success': False, 'message': f'Logo image: {err_msg}'}), 400
 
-    view_url = request.host_url.rstrip('/') + app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
-    qr = segno.make_qr(view_url, error='h')
-    qr_filename = f"qr_{memory.id}.png"
-    qr_path = os.path.join(app.config['QR_FOLDER'], qr_filename)
+    design_config = {
+        'template': template,
+        'dark_color': dark_color,
+        'light_color': light_color,
+        'finder_dark': finder_dark,
+        'finder_light': finder_light,
+        'dot_style': dot_style,
+        'corner_style': corner_style,
+        'size_type': size_type,
+        'logo_shape': logo_shape,
+        'logo_radius': logo_radius,
+        'logo_border_width': logo_border_width,
+        'logo_border_color': logo_border_color,
+        'logo_opacity': logo_opacity,
+        'logo_padding': logo_padding,
+    }
+
+    bg_image_file = None
+    if bg_file and bg_file.filename:
+        bg_image_file = Image.open(bg_file).convert("RGBA")
+        design_config['has_bg_image'] = True
+    else:
+        design_config['has_bg_image'] = False
+
+    logo_image_file = None
+    if logo_file and logo_file.filename:
+        logo_image_file = Image.open(logo_file).convert("RGBA")
+        design_config['has_logo'] = True
+    else:
+        existing_config = memory.get_design_config()
+        if existing_config.get('has_logo') and memory.qr_filename:
+            design_config['has_logo'] = True
+        else:
+            design_config['has_logo'] = False
+
+    design_config['_bg_image_file'] = bg_image_file
+    design_config['_logo_image_file'] = logo_image_file
 
     try:
-        temp_qr_path = os.path.join(app.config['QR_FOLDER'], f"temp_{qr_filename}")
-        qr_bg = None if (bg_file and bg_file.filename) else bg_color
-        qr.save(temp_qr_path, scale=10, dark=color, light=qr_bg)
-
-        qrcode_img = Image.open(temp_qr_path).convert("RGBA")
-
-        if logo_file and logo_file.filename:
-            logo_temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_logo_{memory.id}.png")
-            logo_file.save(logo_temp_path)
-            logo = Image.open(logo_temp_path).convert("RGBA")
-
-            logo_size = qrcode_img.width // 4
-            logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-
-            pos = ((qrcode_img.width - logo_size) // 2, (qrcode_img.height - logo_size) // 2)
-            qrcode_img.paste(logo, pos, logo)
-
-            if os.path.exists(logo_temp_path):
-                os.remove(logo_temp_path)
-
-        if bg_file and bg_file.filename:
-            bg_temp_name = f"temp_bg_{memory.id}.png"
-            bg_temp_path = os.path.join(app.config['UPLOAD_FOLDER'], bg_temp_name)
-            bg_file.save(bg_temp_path)
-
-            background = Image.open(bg_temp_path).convert("RGBA")
-            target_size = (qrcode_img.width + 100, qrcode_img.height + 100)
-            background = background.resize(target_size, Image.Resampling.LANCZOS)
-
-            pos = ((background.width - qrcode_img.width) // 2, (background.height - qrcode_img.height) // 2)
-            background.paste(qrcode_img, pos, qrcode_img)
-            background.save(qr_path)
-
-            if os.path.exists(bg_temp_path):
-                os.remove(bg_temp_path)
-        else:
-            qrcode_img.save(qr_path)
-
-        if os.path.exists(temp_qr_path):
-            os.remove(temp_qr_path)
+        view_url = build_view_url(memory.id)
+        qr_filename, qr_img, quality_score = generate_qr_full(
+            view_url, design_config, app.config['QR_FOLDER'], memory.id
+        )
 
         memory.qr_filename = qr_filename
+        memory.qr_quality_score = quality_score['score']
+
+        stored_config = {k: v for k, v in design_config.items() if not k.startswith('_')}
+        memory.set_design_config(stored_config)
+
         memory.updated_at = datetime.utcnow()
         db.session.commit()
 
         log_operation('design_qr', f'Designed QR code for memory: {memory.title}', memory_id=memory.id)
-        return jsonify({'success': True, 'qr_url': f'/static/qrcodes/{qr_filename}'})
+
+        return jsonify({
+            'success': True,
+            'qr_url': f'/static/qrcodes/{qr_filename}',
+            'quality_score': quality_score,
+            'design_config': stored_config,
+        })
 
     except Exception as e:
         app.logger.error(f"QR design error: {str(e)}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/memories/<memory_id>/export', methods=['GET'])
+@login_required
+def export_qr(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    if not memory.qr_filename:
+        return jsonify({'success': False, 'message': 'No QR code found'}), 400
+
+    qr_path = os.path.join(app.config['QR_FOLDER'], memory.qr_filename)
+    if not os.path.exists(qr_path):
+        return jsonify({'success': False, 'message': 'QR file not found'}), 404
+
+    try:
+        qr_img = Image.open(qr_path).convert("RGBA")
+        variants = generate_export_variants(
+            qr_img, app.config['QR_FOLDER'], memory.id, memory.qr_filename
+        )
+        log_operation('export_qr', f'Exported QR variants for memory: {memory.title}', memory_id=memory.id)
+        return jsonify({'success': True, 'variants': variants})
+    except Exception as e:
+        app.logger.error(f"QR export error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/memories/<memory_id>/quality', methods=['GET'])
+@login_required
+def get_qr_quality(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    if not memory.qr_filename:
+        return jsonify({'success': False, 'message': 'No QR code found'}), 400
+
+    qr_path = os.path.join(app.config['QR_FOLDER'], memory.qr_filename)
+    if not os.path.exists(qr_path):
+        return jsonify({'success': False, 'message': 'QR file not found'}), 404
+
+    try:
+        qr_img = Image.open(qr_path).convert("RGBA")
+        quality_score = assess_qr_readability(qr_img)
+        memory.qr_quality_score = quality_score['score']
+        db.session.commit()
+        return jsonify({'success': True, 'quality': quality_score})
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/decode', methods=['POST'])
@@ -679,10 +847,41 @@ def scan_memory(memory_id):
 
     return jsonify({'success': True, 'memory_id': memory.id})
 
-# Static file serving for Backend (images)
+_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'src')
+
+def serve_frontend_file(filepath):
+    full_path = os.path.join(_FRONTEND_DIR, filepath)
+    if os.path.exists(full_path):
+        return send_from_directory(_FRONTEND_DIR, filepath)
+    return None
+
 @app.route('/static/<path:filename>')
 def serve_static(filename):
-    return send_from_directory('static', filename)
+    backend_path = os.path.join('static', filename)
+    if os.path.exists(backend_path):
+        return send_from_directory('static', filename)
+    frontend_file = serve_frontend_file(os.path.join('static', filename))
+    if frontend_file is not None:
+        return frontend_file
+    abort(404)
+
+@app.route('/')
+def index_page():
+    return send_from_directory(_FRONTEND_DIR, 'index.html')
+
+@app.route('/<path:filename>')
+def serve_frontend(filename):
+    if filename.startswith('api/'):
+        abort(404)
+    if '.' not in filename:
+        html_file = filename + '.html'
+        full_path = os.path.join(_FRONTEND_DIR, html_file)
+        if os.path.exists(full_path):
+            return send_from_directory(_FRONTEND_DIR, html_file)
+    full_path = os.path.join(_FRONTEND_DIR, filename)
+    if os.path.exists(full_path):
+        return send_from_directory(_FRONTEND_DIR, filename)
+    abort(404)
 
 # Initialize DB
 def init_db():
@@ -691,7 +890,7 @@ def init_db():
     from sqlalchemy import inspect, text
     inspector = inspect(db.engine)
 
-    # Add status column to memory table if missing
+    # Add columns to memory table if missing
     if 'memory' in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('memory')]
         if 'status' not in columns:
@@ -711,6 +910,24 @@ def init_db():
                 app.logger.info("Added 'updated_at' column to memory table")
             except Exception as e:
                 app.logger.warning(f"Could not add updated_at column: {e}")
+
+        if 'qr_quality_score' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN qr_quality_score INTEGER DEFAULT 0"))
+                    conn.commit()
+                app.logger.info("Added 'qr_quality_score' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add qr_quality_score column: {e}")
+
+        if 'design_config' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN design_config TEXT"))
+                    conn.commit()
+                app.logger.info("Added 'design_config' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add design_config column: {e}")
 
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():

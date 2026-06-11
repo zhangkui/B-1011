@@ -4,8 +4,8 @@ Flask-Login==0.6.3
 Flask-Cors==4.0.0
 segno==1.6.0
 pypng==0.20220715.0
-opencv-python-headless==4.8.1.78
-numpy==1.26.2
-Pillow==10.1.0
+opencv-python-headless==4.10.0.84
+numpy==2.1.0
+Pillow==10.4.0
 python-magic-bin==0.4.14; sys_platform == 'win32'
 python-magic==0.4.27; sys_platform != 'win32'

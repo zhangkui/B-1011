@@ -29,6 +29,54 @@
         body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
         .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
         .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+        .template-card { transition: all 0.2s ease; cursor: pointer; }
+        .template-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3); }
+        .template-card.active { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4); }
+        .tab-btn { transition: all 0.2s ease; }
+        .tab-btn.active { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-bottom: 2px solid #38bdf8; }
+        input[type="range"] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type="range"]::-webkit-slider-track {
+            height: 6px;
+            background: #334155;
+            border-radius: 3px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #38bdf8;
+            border-radius: 50%;
+            cursor: pointer;
+            margin-top: -6px;
+        }
+        .quality-bar {
+            height: 8px;
+            background: #334155;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .quality-fill {
+            height: 100%;
+            transition: width 0.5s ease, background-color 0.5s ease;
+        }
+        .export-btn { transition: all 0.2s ease; }
+        .export-btn:hover { transform: translateY(-1px); }
+        details > summary {
+            list-style: none;
+            cursor: pointer;
+        }
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
+        .chevron {
+            transition: transform 0.2s ease;
+        }
+        details[open] .chevron {
+            transform: rotate(180deg);
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -46,63 +94,325 @@
     </nav>
 
     <main class="flex-grow container mx-auto px-4 py-8">
-        <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12">
-            <!-- Preview Section -->
-            <div>
-                <h2 class="text-2xl font-bold mb-6">预览</h2>
-                <div class="glass p-8 rounded-2xl flex items-center justify-center min-h-[400px]">
-                    <div id="qr-preview" class="text-gray-500 text-center">
-                        <p>生成二维码后在此显示。</p>
+        <div class="max-w-7xl mx-auto">
+            <h1 class="text-3xl font-bold mb-8 text-center gradient-text">二维码设计工作室</h1>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-1">
+                    <h2 class="text-xl font-bold mb-4">预览</h2>
+                    <div class="glass p-6 rounded-2xl flex items-center justify-center min-h-[350px] sticky top-24">
+                        <div id="qr-preview" class="text-gray-500 text-center w-full">
+                            <p>生成二维码后在此显示。</p>
+                        </div>
+                    </div>
+
+                    <div id="quality-section" class="glass p-5 rounded-2xl mt-4 hidden">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-gray-400">可读性评分</span>
+                            <span id="quality-score" class="text-lg font-bold">--</span>
+                        </div>
+                        <div class="quality-bar mb-2">
+                            <div id="quality-fill" class="quality-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <span id="quality-grade" class="text-gray-300">--</span>
+                        </div>
+                        <p id="quality-tip" class="text-xs text-gray-500 mt-2"></p>
+                    </div>
+
+                    <div id="export-section" class="glass p-5 rounded-2xl mt-4 hidden">
+                        <h3 class="text-sm font-bold mb-3 text-cyber-light">下载导出</h3>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button onclick="downloadQR('standard')" class="export-btn bg-cyber-card hover:bg-cyber-dark border border-cyber-light/30 rounded-lg p-3 text-center">
+                                <div class="text-xs text-gray-400">标准图</div>
+                                <div class="text-sm font-semibold">512px</div>
+                            </button>
+                            <button onclick="downloadQR('hd')" class="export-btn bg-cyber-card hover:bg-cyber-dark border border-cyber-neon/30 rounded-lg p-3 text-center">
+                                <div class="text-xs text-gray-400">高精图</div>
+                                <div class="text-sm font-semibold">1024px</div>
+                            </button>
+                            <button onclick="downloadQR('poster')" class="export-btn bg-cyber-card hover:bg-cyber-dark border border-purple-400/30 rounded-lg p-3 text-center">
+                                <div class="text-xs text-gray-400">海报图</div>
+                                <div class="text-sm font-semibold">1080px</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 text-center">
+                        <a id="view-link" href="#" class="text-gray-400 hover:text-cyber-light text-sm">跳过，直接查看记忆 &rarr;</a>
                     </div>
                 </div>
-                <div id="download-section" class="mt-6 text-center hidden">
-                    <a id="download-link" href="#" download="memory_qr.png" class="inline-block border border-cyber-light text-cyber-light px-6 py-2 rounded-full hover:bg-cyber-light/10 transition">
-                        下载二维码图片
-                    </a>
-                </div>
-            </div>
 
-            <!-- Controls Section -->
-            <div>
-                <h2 class="text-2xl font-bold mb-6">设计二维码</h2>
-                <div class="glass p-8 rounded-2xl">
-                    <form id="design-form">
-                        
-                        <div class="grid grid-cols-2 gap-4 mb-6">
-                            <div>
-                                <label class="block text-gray-400 text-sm font-bold mb-2">二维码颜色</label>
-                                <input type="color" name="color" value="#000000" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
-                            </div>
-                            <div>
-                                <label class="block text-gray-400 text-sm font-bold mb-2">背景颜色</label>
-                                <input type="color" name="bg_color" value="#ffffff" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
-                            </div>
-                        </div>
-                        
-                        <div class="mb-6">
-                            <label class="block text-gray-400 text-sm font-bold mb-2">背景图片 (可选)</label>
-                            <p class="text-xs text-gray-500 mb-2">上传一张图片嵌入到二维码背后。</p>
-                            <input type="file" name="bg_image" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-light file:text-cyber-dark hover:file:bg-blue-400">
+                <div class="lg:col-span-2">
+                    <div class="glass rounded-2xl overflow-hidden">
+                        <div class="flex border-b border-gray-700">
+                            <button class="tab-btn flex-1 py-3 px-4 text-sm font-medium active" data-tab="template" onclick="switchTab('template')">
+                                🎨 主题模板
+                            </button>
+                            <button class="tab-btn flex-1 py-3 px-4 text-sm font-medium" data-tab="style" onclick="switchTab('style')">
+                                ✏️ 自定义样式
+                            </button>
+                            <button class="tab-btn flex-1 py-3 px-4 text-sm font-medium" data-tab="logo" onclick="switchTab('logo')">
+                                🏷️ Logo设置
+                            </button>
+                            <button class="tab-btn flex-1 py-3 px-4 text-sm font-medium" data-tab="layer" onclick="switchTab('layer')">
+                                🖼️ 背景图层
+                            </button>
                         </div>
 
-                        <div class="mb-8">
-                            <label class="block text-gray-400 text-sm font-bold mb-2">Logo 嵌入 (可选)</label>
-                            <p class="text-xs text-gray-500 mb-2">在二维码中心嵌入一个 Logo 图片。</p>
-                            <input type="file" name="logo_image" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-neon file:text-white hover:file:bg-pink-400">
-                        </div>
-                        
-                        <button class="w-full bg-cyber-light text-cyber-dark font-bold py-3 px-4 rounded-lg hover:bg-blue-400 transition" type="submit">
-                            生成 / 更新 二维码
-                        </button>
-                    </form>
-                    
-                    <div class="mt-8 pt-8 border-t border-gray-700">
-                         <a id="view-link" href="#" class="block text-center text-gray-400 hover:text-white">跳过，直接查看记忆 &rarr;</a>
+                        <form id="design-form" class="p-6">
+                            <div id="tab-template" class="tab-content">
+                                <p class="text-sm text-gray-400 mb-4">选择一个预设模板快速开始设计</p>
+                                <div class="grid grid-cols-3 sm:grid-cols-4 gap-3" id="template-list">
+                                </div>
+                            </div>
+
+                            <div id="tab-style" class="tab-content hidden">
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">颜色设置</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="grid grid-cols-2 gap-4 mt-4">
+                                        <div>
+                                            <label class="block text-gray-400 text-xs font-bold mb-2">前景色（码点）</label>
+                                            <input type="color" name="dark_color" value="#000000" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                                        </div>
+                                        <div>
+                                            <label class="block text-gray-400 text-xs font-bold mb-2">背景色</label>
+                                            <input type="color" name="light_color" value="#ffffff" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                                        </div>
+                                        <div>
+                                            <label class="block text-gray-400 text-xs font-bold mb-2">定位点颜色</label>
+                                            <input type="color" name="finder_dark" value="#000000" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                                        </div>
+                                        <div>
+                                            <label class="block text-gray-400 text-xs font-bold mb-2">定位点背景</label>
+                                            <input type="color" name="finder_light" value="#ffffff" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">码点形状</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="grid grid-cols-3 gap-2">
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="dot_style" value="square" class="hidden peer" checked>
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-light peer-checked:bg-cyber-light/10 transition">
+                                                    <div class="w-6 h-6 mx-auto mb-1 bg-current rounded-none" style="background: currentColor"></div>
+                                                    <span class="text-xs">方形</span>
+                                                </div>
+                                            </label>
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="dot_style" value="rounded" class="hidden peer">
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-light peer-checked:bg-cyber-light/10 transition">
+                                                    <div class="w-6 h-6 mx-auto mb-1 rounded-md" style="background: currentColor"></div>
+                                                    <span class="text-xs">圆角</span>
+                                                </div>
+                                            </label>
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="dot_style" value="circle" class="hidden peer">
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-light peer-checked:bg-cyber-light/10 transition">
+                                                    <div class="w-6 h-6 mx-auto mb-1 rounded-full" style="background: currentColor"></div>
+                                                    <span class="text-xs">圆形</span>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">角落定位样式</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="corner_style" value="square" class="hidden peer" checked>
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-light peer-checked:bg-cyber-light/10 transition">
+                                                    <div class="w-10 h-10 mx-auto mb-1 border-2 border-current rounded-none"></div>
+                                                    <span class="text-xs">方形</span>
+                                                </div>
+                                            </label>
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="corner_style" value="rounded" class="hidden peer">
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-light peer-checked:bg-cyber-light/10 transition">
+                                                    <div class="w-10 h-10 mx-auto mb-1 border-2 border-current rounded-lg"></div>
+                                                    <span class="text-xs">圆角</span>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details>
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">输出尺寸</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <select name="size_type" class="w-full bg-cyber-card border border-gray-600 rounded-lg px-3 py-2 text-sm">
+                                            <option value="standard">标准图 (推荐)</option>
+                                            <option value="hd">高精图</option>
+                                            <option value="poster">海报图（带边距）</option>
+                                        </select>
+                                    </div>
+                                </details>
+                            </div>
+
+                            <div id="tab-logo" class="tab-content hidden">
+                                <div class="mb-6">
+                                    <label class="block text-gray-400 text-sm font-bold mb-2">Logo 图片 (可选)</label>
+                                    <p class="text-xs text-gray-500 mb-2">在二维码中心嵌入 Logo，建议使用方形图片</p>
+                                    <input type="file" name="logo_image" accept="image/*" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-neon file:text-white hover:file:bg-pink-400">
+                                    <p id="logo-has-file" class="text-xs text-green-400 mt-2 hidden">✓ 已上传 Logo 图片</p>
+                                </div>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">形状样式</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="grid grid-cols-3 gap-2">
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="logo_shape" value="square" class="hidden peer" checked>
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-neon peer-checked:bg-cyber-neon/10 transition">
+                                                    <span class="text-xs">方形</span>
+                                                </div>
+                                            </label>
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="logo_shape" value="rounded" class="hidden peer">
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-neon peer-checked:bg-cyber-neon/10 transition">
+                                                    <span class="text-xs">圆角</span>
+                                                </div>
+                                            </label>
+                                            <label class="cursor-pointer">
+                                                <input type="radio" name="logo_shape" value="circle" class="hidden peer">
+                                                <div class="p-3 text-center rounded-lg border border-gray-600 peer-checked:border-cyber-neon peer-checked:bg-cyber-neon/10 transition">
+                                                    <span class="text-xs">圆形</span>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">圆角程度</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="flex items-center gap-3">
+                                            <input type="range" name="logo_radius" min="0" max="50" value="0" class="flex-1">
+                                            <span id="logo-radius-val" class="text-sm w-12 text-right">0%</span>
+                                        </div>
+                                        <p class="text-xs text-gray-500 mt-1">仅在圆角/方形形状下有效</p>
+                                    </div>
+                                </details>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">描边效果</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4 space-y-3">
+                                        <div>
+                                            <div class="flex items-center justify-between mb-1">
+                                                <label class="text-xs text-gray-400">描边宽度</label>
+                                                <span id="logo-border-val" class="text-xs">0px</span>
+                                            </div>
+                                            <input type="range" name="logo_border_width" min="0" max="20" value="0" class="w-full">
+                                        </div>
+                                        <div class="flex items-center gap-3">
+                                            <label class="text-xs text-gray-400 whitespace-nowrap">描边颜色</label>
+                                            <input type="color" name="logo_border_color" value="#ffffff" class="w-10 h-8 rounded cursor-pointer bg-transparent border-0">
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details open class="mb-4">
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">透明度</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="flex items-center gap-3">
+                                            <input type="range" name="logo_opacity" min="10" max="100" value="100" class="flex-1">
+                                            <span id="logo-opacity-val" class="text-sm w-12 text-right">100%</span>
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details>
+                                    <summary class="flex items-center justify-between py-2 border-b border-gray-700">
+                                        <span class="text-sm font-semibold">内边距</span>
+                                        <svg class="chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                        </svg>
+                                    </summary>
+                                    <div class="mt-4">
+                                        <div class="flex items-center gap-3">
+                                            <input type="range" name="logo_padding" min="0" max="40" value="8" class="flex-1">
+                                            <span id="logo-padding-val" class="text-sm w-12 text-right">8px</span>
+                                        </div>
+                                        <p class="text-xs text-gray-500 mt-1">Logo 与描边之间的距离</p>
+                                    </div>
+                                </details>
+                            </div>
+
+                            <div id="tab-layer" class="tab-content hidden">
+                                <div class="mb-6">
+                                    <label class="block text-gray-400 text-sm font-bold mb-2">背景图片 (可选)</label>
+                                    <p class="text-xs text-gray-500 mb-2">上传一张图片作为背景图层</p>
+                                    <input type="file" name="bg_image" accept="image/*" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-light file:text-cyber-dark hover:file:bg-blue-400">
+                                    <p id="bg-has-file" class="text-xs text-green-400 mt-2 hidden">✓ 已上传背景图片</p>
+                                </div>
+
+                                <div class="bg-cyber-card/50 rounded-lg p-4 text-sm text-gray-400">
+                                    <p class="font-semibold text-cyber-light mb-2">💡 小提示</p>
+                                    <ul class="space-y-1 text-xs">
+                                        <li>• 背景图片会被自动缩放以适配二维码</li>
+                                        <li>• 建议选择对比度较高的背景色</li>
+                                        <li>• 复杂背景可能影响扫码识别率</li>
+                                        <li>• 请关注可读性评分，确保扫码正常</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <input type="hidden" name="template" value="classic">
+
+                            <button type="submit" class="w-full mt-6 bg-gradient-to-r from-cyber-light to-cyber-neon text-cyber-dark font-bold py-3 px-4 rounded-lg hover:opacity-90 transition">
+                                ✨ 生成 / 更新 二维码
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
         </div>
     </main>
+
     <script src="/static/js/main.js"></script>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
@@ -111,42 +421,251 @@
 
         document.getElementById('view-link').href = `/view_memory.html?id=${memoryId}`;
 
-        // Initial Load to see if QR exists
+        let templates = [];
+        let currentTemplate = 'classic';
+        let hasLogo = false;
+        let hasBgImage = false;
+        let exportVariants = null;
+
+        async function loadTemplates() {
+            try {
+                const res = await fetch('/api/qr/templates');
+                const data = await res.json();
+                if (data.success) {
+                    templates = data.templates;
+                    renderTemplates();
+                }
+            } catch (e) {
+                console.error('Failed to load templates', e);
+            }
+        }
+
+        function renderTemplates() {
+            const container = document.getElementById('template-list');
+            container.innerHTML = templates.map(t => `
+                <div class="template-card rounded-xl p-3 border-2 border-gray-600 ${t.id === currentTemplate ? 'active' : ''}" 
+                     data-template="${t.id}" onclick="selectTemplate('${t.id}')">
+                    <div class="aspect-square rounded-lg mb-2 flex items-center justify-center" 
+                         style="background: ${t.light}; border: 1px solid ${t.dark}30">
+                        <div class="w-10 h-10 relative">
+                            <div class="absolute top-0 left-0 w-3 h-3" style="background: ${t.finder_dark}"></div>
+                            <div class="absolute top-0 right-0 w-3 h-3" style="background: ${t.finder_dark}"></div>
+                            <div class="absolute bottom-0 left-0 w-3 h-3" style="background: ${t.finder_dark}"></div>
+                            <div class="absolute top-1 left-1 w-1 h-1" style="background: ${t.finder_light}"></div>
+                            <div class="absolute top-1 right-1 w-1 h-1" style="background: ${t.finder_light}"></div>
+                            <div class="absolute bottom-1 left-1 w-1 h-1" style="background: ${t.finder_light}"></div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-center font-medium">${t.name}</p>
+                </div>
+            `).join('');
+        }
+
+        function selectTemplate(id) {
+            currentTemplate = id;
+            document.querySelector('input[name="template"]').value = id;
+            document.querySelectorAll('.template-card').forEach(el => {
+                el.classList.toggle('active', el.dataset.template === id);
+            });
+
+            const tpl = templates.find(t => t.id === id);
+            if (tpl) {
+                document.querySelector('input[name="dark_color"]').value = tpl.dark;
+                document.querySelector('input[name="light_color"]').value = tpl.light;
+                document.querySelector('input[name="finder_dark"]').value = tpl.finder_dark;
+                document.querySelector('input[name="finder_light"]').value = tpl.finder_light;
+                document.querySelector(`input[name="dot_style"][value="${tpl.dot_style}"]`).checked = true;
+                document.querySelector(`input[name="corner_style"][value="${tpl.corner_style}"]`).checked = true;
+            }
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tabName);
+            });
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        }
+
+        function updateRangeLabels() {
+            const logoRadius = document.querySelector('input[name="logo_radius"]');
+            document.getElementById('logo-radius-val').textContent = logoRadius.value + '%';
+
+            const logoBorder = document.querySelector('input[name="logo_border_width"]');
+            document.getElementById('logo-border-val').textContent = logoBorder.value + 'px';
+
+            const logoOpacity = document.querySelector('input[name="logo_opacity"]');
+            document.getElementById('logo-opacity-val').textContent = logoOpacity.value + '%';
+
+            const logoPadding = document.querySelector('input[name="logo_padding"]');
+            document.getElementById('logo-padding-val').textContent = logoPadding.value + 'px';
+        }
+
+        document.querySelectorAll('input[type="range"]').forEach(input => {
+            input.addEventListener('input', updateRangeLabels);
+        });
+
+        document.querySelector('input[name="logo_image"]').addEventListener('change', (e) => {
+            hasLogo = e.target.files && e.target.files.length > 0;
+            document.getElementById('logo-has-file').classList.toggle('hidden', !hasLogo);
+        });
+
+        document.querySelector('input[name="bg_image"]').addEventListener('change', (e) => {
+            hasBgImage = e.target.files && e.target.files.length > 0;
+            document.getElementById('bg-has-file').classList.toggle('hidden', !hasBgImage);
+        });
+
+        function updateQuality(quality) {
+            const section = document.getElementById('quality-section');
+            section.classList.remove('hidden');
+
+            document.getElementById('quality-score').textContent = quality.score + '分';
+            document.getElementById('quality-grade').textContent = quality.grade;
+            document.getElementById('quality-tip').textContent = quality.recommendation;
+
+            const fill = document.getElementById('quality-fill');
+            fill.style.width = quality.score + '%';
+
+            if (quality.score >= 80) {
+                fill.style.backgroundColor = '#22c55e';
+            } else if (quality.score >= 60) {
+                fill.style.backgroundColor = '#eab308';
+            } else if (quality.score >= 40) {
+                fill.style.backgroundColor = '#f97316';
+            } else {
+                fill.style.backgroundColor = '#ef4444';
+            }
+        }
+
+        function updatePreview(url, quality) {
+            const preview = document.getElementById('qr-preview');
+            preview.innerHTML = `<img src="${url}?t=${new Date().getTime()}" alt="Current QR" class="rounded-lg shadow-2xl max-w-full max-h-[350px]">`;
+
+            document.getElementById('export-section').classList.remove('hidden');
+
+            if (quality) {
+                updateQuality(quality);
+            }
+        }
+
+        async function downloadQR(type) {
+            if (!exportVariants || !exportVariants[type]) {
+                try {
+                    const res = await fetch(`/api/memories/${memoryId}/export`);
+                    const data = await res.json();
+                    if (data.success) {
+                        exportVariants = data.variants;
+                    }
+                } catch (e) {
+                    alert('导出失败，请稍后重试');
+                    console.error(e);
+                    return;
+                }
+            }
+
+            if (exportVariants && exportVariants[type]) {
+                const a = document.createElement('a');
+                a.href = exportVariants[type].url + '?t=' + Date.now();
+                a.download = `qrcode_${type}.png`;
+                a.click();
+            }
+        }
+
         fetch(`/api/memories/${memoryId}`)
             .then(res => res.json())
             .then(data => {
                 if(data.qr_url) {
                     updatePreview(data.qr_url);
+                    if (data.design_config) {
+                        applyDesignConfig(data.design_config);
+                    }
+                    if (data.qr_quality_score) {
+                        updateQuality({
+                            score: data.qr_quality_score,
+                            grade: data.qr_quality_score >= 80 ? '优秀' : (data.qr_quality_score >= 60 ? '良好' : '一般'),
+                            recommendation: ''
+                        });
+                    }
                 }
             });
 
-        function updatePreview(url) {
-            const preview = document.getElementById('qr-preview');
-            preview.innerHTML = `<img src="${url}?t=${new Date().getTime()}" alt="Current QR" class="rounded-lg shadow-2xl max-w-full">`;
-            const dlSection = document.getElementById('download-section');
-            const dlLink = document.getElementById('download-link');
-            dlSection.classList.remove('hidden');
-            dlLink.href = url;
+        function applyDesignConfig(config) {
+            if (config.template) {
+                currentTemplate = config.template;
+                document.querySelector('input[name="template"]').value = config.template;
+                renderTemplates();
+            }
+            if (config.dark_color) document.querySelector('input[name="dark_color"]').value = config.dark_color;
+            if (config.light_color) document.querySelector('input[name="light_color"]').value = config.light_color;
+            if (config.finder_dark) document.querySelector('input[name="finder_dark"]').value = config.finder_dark;
+            if (config.finder_light) document.querySelector('input[name="finder_light"]').value = config.finder_light;
+            if (config.dot_style) document.querySelector(`input[name="dot_style"][value="${config.dot_style}"]`).checked = true;
+            if (config.corner_style) document.querySelector(`input[name="corner_style"][value="${config.corner_style}"]`).checked = true;
+            if (config.size_type) document.querySelector('select[name="size_type"]').value = config.size_type;
+            if (config.logo_shape) document.querySelector(`input[name="logo_shape"][value="${config.logo_shape}"]`).checked = true;
+            if (config.logo_radius !== undefined) {
+                document.querySelector('input[name="logo_radius"]').value = config.logo_radius;
+            }
+            if (config.logo_border_width !== undefined) {
+                document.querySelector('input[name="logo_border_width"]').value = config.logo_border_width;
+            }
+            if (config.logo_border_color) document.querySelector('input[name="logo_border_color"]').value = config.logo_border_color;
+            if (config.logo_opacity !== undefined) {
+                document.querySelector('input[name="logo_opacity"]').value = config.logo_opacity;
+            }
+            if (config.logo_padding !== undefined) {
+                document.querySelector('input[name="logo_padding"]').value = config.logo_padding;
+            }
+            if (config.has_logo) {
+                hasLogo = true;
+                document.getElementById('logo-has-file').classList.remove('hidden');
+                document.getElementById('logo-has-file').textContent = '✓ 已有 Logo（重新上传将替换）';
+            }
+            if (config.has_bg_image) {
+                hasBgImage = true;
+                document.getElementById('bg-has-file').classList.remove('hidden');
+                document.getElementById('bg-has-file').textContent = '✓ 已有背景图（重新上传将替换）';
+            }
+            updateRangeLabels();
         }
 
         document.getElementById('design-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
+
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.textContent = '生成中...';
+
             try {
                 const res = await fetch(`/api/memories/${memoryId}/design`, {
                     method: 'POST',
                     body: formData
                 });
-                if (res.ok) {
-                    const data = await res.json();
-                    updatePreview(data.qr_url);
+                const data = await res.json();
+                if (data.success) {
+                    updatePreview(data.qr_url, data.quality_score);
+                    if (data.design_config) {
+                        applyDesignConfig(data.design_config);
+                    }
+                    exportVariants = null;
                 } else {
-                    alert('生成失败');
+                    alert('生成失败：' + (data.message || data.error || '未知错误'));
                 }
             } catch (err) {
                 console.error(err);
+                alert('生成失败，请稍后重试');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
             }
         });
+
+        loadTemplates();
+        updateRangeLabels();
     </script>
 </body>
 </html>
