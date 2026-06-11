@@ -51,6 +51,7 @@ function handleCreateClick(e) {
     if (isUserAuthenticated) {
         window.location.href = '/create.html';
     } else {
-        window.location.href = '/login.html';
+        const redirect = encodeURIComponent('/create.html');
+        window.location.href = `/login.html?redirect=${redirect}`;
     }
 }

@@ -55,8 +55,14 @@
             </a>
         </div>
 
+        <div class="flex gap-2 mb-8 flex-wrap">
+            <button onclick="filterByStatus('')" class="status-filter px-4 py-2 rounded-full text-sm font-medium bg-cyber-light text-cyber-dark" data-status="">全部</button>
+            <button onclick="filterByStatus('active')" class="status-filter px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700" data-status="active">正常</button>
+            <button onclick="filterByStatus('draft')" class="status-filter px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700" data-status="draft">草稿</button>
+            <button onclick="filterByStatus('archived')" class="status-filter px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700" data-status="archived">已归档</button>
+        </div>
+
         <div id="memories-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <!-- Loading... -->
             <p class="text-gray-500">加载中...</p>
         </div>
     </main>
@@ -82,9 +88,40 @@
 
     <script src="/static/js/main.js"></script>
     <script>
+        let currentFilter = '';
+
+        function getStatusBadge(status) {
+            const labels = {
+                'active': '正常',
+                'draft': '草稿',
+                'archived': '已归档'
+            };
+            const colors = {
+                'active': 'bg-green-500/20 text-green-400 border-green-500/30',
+                'draft': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+                'archived': 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+            };
+            const label = labels[status] || status;
+            const color = colors[status] || colors['active'];
+            return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${color}">${label}</span>`;
+        }
+
+        function filterByStatus(status) {
+            currentFilter = status;
+            document.querySelectorAll('.status-filter').forEach(btn => {
+                if (btn.dataset.status === status) {
+                    btn.className = 'status-filter px-4 py-2 rounded-full text-sm font-medium bg-cyber-light text-cyber-dark';
+                } else {
+                    btn.className = 'status-filter px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700';
+                }
+            });
+            loadMemories();
+        }
+
         async function loadMemories() {
             try {
-                const res = await fetch('/api/memories');
+                const url = currentFilter ? `/api/memories?status=${currentFilter}` : '/api/memories';
+                const res = await fetch(url);
                 if (res.status === 401) {
                     window.location.href = '/login.html';
                     return;
@@ -94,10 +131,11 @@
                 grid.innerHTML = '';
 
                 if (memories.length === 0) {
+                    const emptyText = currentFilter ? `没有${currentFilter === 'draft' ? '草稿' : currentFilter === 'archived' ? '已归档' : ''}状态的记忆` : '你还没有创建任何记忆。';
                     grid.innerHTML = `
                         <div class="col-span-full text-center py-20 text-gray-500">
-                            <p class="text-xl mb-4">你还没有创建任何记忆。</p>
-                            <a href="/create.html" class="text-cyber-light hover:underline">创建你的第一个记忆</a>
+                            <p class="text-xl mb-4">${emptyText}</p>
+                            ${!currentFilter ? '<a href="/create.html" class="text-cyber-light hover:underline">创建你的第一个记忆</a>' : ''}
                         </div>
                     `;
                     return;
@@ -108,16 +146,20 @@
                     card.className = 'glass rounded-xl overflow-hidden hover:border-cyber-light transition group';
                     card.innerHTML = `
                         <div class="aspect-square bg-gray-800 flex items-center justify-center p-4 relative">
-                            ${m.qr_url 
+                            ${m.qr_url
                                 ? `<img src="${m.qr_url}" alt="QR Code" class="max-h-full max-w-full rounded-lg shadow-lg group-hover:scale-105 transition duration-500">`
                                 : '<span class="text-gray-600">未生成二维码</span>'
                             }
+                            ${m.status !== 'active' ? `<div class="absolute top-3 right-3">${getStatusBadge(m.status)}</div>` : ''}
                             <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition duration-300 flex items-center justify-center gap-4">
                                 <a href="/view_memory.html?id=${m.id}" class="bg-white text-black p-3 rounded-full hover:bg-gray-200" title="查看">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                                 </a>
-                                <a href="/design.html?id=${m.id}" class="bg-cyber-light text-black p-3 rounded-full hover:bg-blue-400" title="设计">
+                                <a href="/edit_memory.html?id=${m.id}" class="bg-cyber-neon text-black p-3 rounded-full hover:bg-pink-400" title="编辑">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                </a>
+                                <a href="/design.html?id=${m.id}" class="bg-cyber-light text-black p-3 rounded-full hover:bg-blue-400" title="设计二维码">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
                                 </a>
                                 <button onclick="deleteMemory('${m.id}')" class="bg-red-500 text-white p-3 rounded-full hover:bg-red-600" title="删除">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>

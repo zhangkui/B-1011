@@ -74,26 +74,31 @@
                 formData.append('qr_image', input.files[0]);
                 const status = document.getElementById('status-msg');
                 status.textContent = '正在解码...';
-                
+                status.className = 'text-sm text-gray-400';
+
                 try {
                     const res = await fetch('/api/decode', {
                         method: 'POST',
                         body: formData
                     });
                     const data = await res.json();
-                    
+
                     if (res.ok) {
                         status.textContent = '解码成功，正在跳转...';
-                        window.location.href = `/view_memory.html?id=${data.memory_id}`;
-                    } else if (res.status === 401) {
-                         status.innerHTML = `<span class="text-yellow-400">发现加密记忆。请 <a href="/login.html" class="underline">登录</a> 后查看。</span>`;
+                        const targetUrl = data.view_url || `/view_memory.html?id=${data.memory_id}`;
+                        window.location.href = targetUrl;
+                    } else if (res.status === 401 && data.error === 'auth_required') {
+                        const viewUrl = data.redirect_url || `/view_memory.html?id=${data.memory_id}`;
+                        const loginUrl = `/login.html?redirect=${encodeURIComponent(viewUrl)}`;
+                        status.innerHTML = `<span class="text-yellow-400">发现加密记忆。请 <a href="${loginUrl}" class="underline font-bold">登录</a> 后查看。登录后将自动跳转到记忆页面。</span>`;
                     } else {
                         status.textContent = data.message || '无效的二维码';
-                        status.className = 'text-red-500';
+                        status.className = 'text-red-500 text-sm';
                     }
                 } catch (err) {
                     console.error(err);
-                    status.textContent = '发生错误';
+                    status.textContent = '发生错误，请重试';
+                    status.className = 'text-red-500 text-sm';
                 }
             }
         }

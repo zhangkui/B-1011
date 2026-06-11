@@ -2,9 +2,10 @@ import os
 import uuid
 import logging
 import magic
+import re
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, abort
+from flask import Flask, request, jsonify, send_from_directory, abort, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -22,31 +23,116 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///memory_qr.db'
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['QR_FOLDER'] = os.path.join('static', 'qrcodes')
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024  # 64MB max limit
+app.config['MEMORY_VIEW_URL'] = '/view_memory.html'
 
 # Constants for Validation
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mov', 'avi'}
 ALLOWED_MIME_TYPES = {
-    'image/png', 'image/jpeg', 'image/gif', 
+    'image/png', 'image/jpeg', 'image/gif',
     'video/mp4', 'video/quicktime', 'video/x-msvideo'
 }
+IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+VIDEO_EXTENSIONS = {'mp4', 'mov', 'avi'}
 MAX_TITLE_LENGTH = 100
 MAX_TEXT_LENGTH = 2000
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB for images
+MAX_VIDEO_SIZE = 64 * 1024 * 1024  # 64MB for videos
 
-def allowed_file(filename, file_stream=None):
-    # Check extension
-    if '.' not in filename or filename.rsplit('.', 1)[1].lower() not in ALLOWED_EXTENSIONS:
-        return False
-    
+# Status constants
+MEMORY_STATUS_ACTIVE = 'active'
+MEMORY_STATUS_ARCHIVED = 'archived'
+MEMORY_STATUS_DRAFT = 'draft'
+
+# Dangerous file patterns
+DANGEROUS_EXTENSIONS = {'exe', 'bat', 'cmd', 'sh', 'php', 'js', 'html', 'htm', 'svg', 'pdf', 'zip', 'rar', '7z'}
+DANGEROUS_MIME_PREFIXES = {'application/', 'text/html', 'text/javascript'}
+
+def allowed_file(filename, file_stream=None, file_size=0):
+    if not filename:
+        return False, 'No filename provided'
+
+    filename_lower = filename.lower()
+
+    # Check for dangerous extensions first
+    if '.' in filename_lower:
+        ext = filename_lower.rsplit('.', 1)[1].lower()
+        if ext in DANGEROUS_EXTENSIONS:
+            return False, f'File type .{ext} is not allowed'
+        if ext not in ALLOWED_EXTENSIONS:
+            return False, f'File type .{ext} is not supported'
+    else:
+        return False, 'File has no extension'
+
+    # Check for path traversal or malicious filenames
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return False, 'Invalid filename'
+
+    # Double extension check (e.g., image.jpg.exe)
+    parts = filename_lower.split('.')
+    if len(parts) > 2:
+        last_ext = parts[-1]
+        second_last_ext = parts[-2]
+        if second_last_ext not in ALLOWED_EXTENSIONS and last_ext in ALLOWED_EXTENSIONS:
+            # Suspicious double extension
+            pass
+
     # Check MIME type if stream provided
     if file_stream:
-        header = file_stream.read(2048)
-        file_stream.seek(0)
-        mime = magic.from_buffer(header, mime=True)
-        if mime not in ALLOWED_MIME_TYPES:
-            app.logger.warning(f"File content mismatch: {filename} has MIME {mime}")
-            return False
-            
-    return True
+        try:
+            header = file_stream.read(4096)
+            file_stream.seek(0)
+            mime = magic.from_buffer(header, mime=True)
+
+            # Check dangerous MIME types
+            for prefix in DANGEROUS_MIME_PREFIXES:
+                if mime.startswith(prefix) and mime not in ALLOWED_MIME_TYPES:
+                    app.logger.warning(f"Blocked dangerous MIME type: {filename} has MIME {mime}")
+                    return False, 'File content type not allowed'
+
+            if mime not in ALLOWED_MIME_TYPES:
+                app.logger.warning(f"File content mismatch: {filename} has MIME {mime}")
+                return False, 'File content does not match extension'
+        except Exception as e:
+            app.logger.error(f"MIME detection error for {filename}: {str(e)}")
+            return False, 'File validation failed'
+
+    # Size validation based on type
+    if file_size > 0:
+        ext = filename_lower.rsplit('.', 1)[1].lower()
+        if ext in IMAGE_EXTENSIONS and file_size > MAX_IMAGE_SIZE:
+            return False, f'Image too large (max {MAX_IMAGE_SIZE // 1024 // 1024}MB)'
+        if ext in VIDEO_EXTENSIONS and file_size > MAX_VIDEO_SIZE:
+            return False, f'Video too large (max {MAX_VIDEO_SIZE // 1024 // 1024}MB)'
+
+    return True, 'OK'
+
+def sanitize_filename(filename):
+    filename = secure_filename(filename)
+    if not filename:
+        filename = 'upload_' + uuid.uuid4().hex[:8]
+    return filename
+
+def is_safe_redirect_url(target):
+    if not target:
+        return False
+    # Only allow relative URLs (same origin)
+    if target.startswith('/') and not target.startswith('//'):
+        return True
+    return False
+
+def log_operation(action, detail='', user_id=None, memory_id=None, ip=None):
+    try:
+        log = OperationLog(
+            action=action,
+            detail=detail[:500] if detail else '',
+            user_id=user_id or (current_user.id if current_user.is_authenticated else None),
+            memory_id=memory_id,
+            ip=ip or request.remote_addr
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception as e:
+        app.logger.error(f"Failed to write operation log: {str(e)}")
 
 # Logging Configuration
 if not os.path.exists('logs'):
@@ -79,6 +165,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     memories = db.relationship('Memory', backref='author', lazy=True)
+    operation_logs = db.relationship('OperationLog', backref='user', lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -92,9 +179,11 @@ class Memory(db.Model):
     title = db.Column(db.String(200), nullable=False)
     text_content = db.Column(db.Text, nullable=True)
     media_filename = db.Column(db.String(200), nullable=True)
-    media_type = db.Column(db.String(20), nullable=True) # 'image', 'video'
+    media_type = db.Column(db.String(20), nullable=True)
     qr_filename = db.Column(db.String(200), nullable=True)
+    status = db.Column(db.String(20), default=MEMORY_STATUS_ACTIVE, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
         return {
@@ -104,8 +193,30 @@ class Memory(db.Model):
             'media_url': f'/static/uploads/{self.media_filename}' if self.media_filename else None,
             'media_type': self.media_type,
             'qr_url': f'/static/qrcodes/{self.qr_filename}' if self.qr_filename else None,
+            'status': self.status,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
-            'author': self.author.username
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
+            'author': self.author.username,
+            'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}'
+        }
+
+class OperationLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    memory_id = db.Column(db.String(36), nullable=True)
+    action = db.Column(db.String(50), nullable=False)
+    detail = db.Column(db.String(500), nullable=True)
+    ip = db.Column(db.String(50), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'action': self.action,
+            'detail': self.detail,
+            'memory_id': self.memory_id,
+            'ip': self.ip,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S')
         }
 
 @login_manager.user_loader
@@ -132,28 +243,44 @@ def auth_status():
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.json
-    username = data.get('username')
-    password = data.get('password')
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    redirect_url = data.get('redirect', '')
+
     user = User.query.filter_by(username=username).first()
     if user and user.check_password(password):
         login_user(user)
         app.logger.info(f"User logged in: {username}")
-        return jsonify({'success': True, 'username': user.username})
+        log_operation('login', f'User {username} logged in', user_id=user.id)
+
+        result = {'success': True, 'username': user.username}
+        if redirect_url and is_safe_redirect_url(redirect_url):
+            result['redirect'] = redirect_url
+        return jsonify(result)
+
     app.logger.warning(f"Failed login attempt for user: {username}")
+    log_operation('login_failed', f'Failed login for username: {username}', ip=request.remote_addr)
     return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     data = request.json
     username = data.get('username', '').strip()
-    password = data.get('password')
-    
+    password = data.get('password', '')
+    redirect_url = data.get('redirect', '')
+
     if not username or not password:
         return jsonify({'success': False, 'message': 'Username and password required'}), 400
-        
+
+    if len(username) < 3 or len(username) > 50:
+        return jsonify({'success': False, 'message': 'Username must be between 3 and 50 characters'}), 400
+
+    if len(password) < 6:
+        return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+
     if User.query.filter_by(username=username).first():
         return jsonify({'success': False, 'message': 'Username already exists'}), 400
-    
+
     try:
         user = User(username=username)
         user.set_password(password)
@@ -161,7 +288,12 @@ def register():
         db.session.commit()
         login_user(user)
         app.logger.info(f"New user registered: {username}")
-        return jsonify({'success': True, 'username': user.username})
+        log_operation('register', f'New user registered: {username}', user_id=user.id)
+
+        result = {'success': True, 'username': user.username}
+        if redirect_url and is_safe_redirect_url(redirect_url):
+            result['redirect'] = redirect_url
+        return jsonify(result)
     except Exception as e:
         app.logger.error(f"Registration error: {str(e)}")
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
@@ -170,14 +302,21 @@ def register():
 @login_required
 def logout():
     username = current_user.username
+    user_id = current_user.id
     logout_user()
     app.logger.info(f"User logged out: {username}")
+    log_operation('logout', f'User {username} logged out', user_id=user_id)
     return jsonify({'success': True})
 
 @app.route('/api/memories', methods=['GET'])
 @login_required
 def get_memories():
-    memories = Memory.query.filter_by(user_id=current_user.id).order_by(Memory.created_at.desc()).all()
+    status_filter = request.args.get('status', '')
+    query = Memory.query.filter_by(user_id=current_user.id)
+    if status_filter:
+        query = query.filter_by(status=status_filter)
+    memories = query.order_by(Memory.created_at.desc()).all()
+    log_operation('list_memories', f'Listed {len(memories)} memories')
     return jsonify([m.to_dict() for m in memories])
 
 @app.route('/api/memories', methods=['POST'])
@@ -186,45 +325,53 @@ def create_memory():
     title = request.form.get('title', '').strip()
     text = request.form.get('text', '').strip()
     file = request.files.get('file')
-    
-    # Validation: Length Limits
+    status = request.form.get('status', MEMORY_STATUS_ACTIVE)
+
+    if status not in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
+        status = MEMORY_STATUS_ACTIVE
+
     if not title:
         return jsonify({'success': False, 'message': 'Title is required'}), 400
     if len(title) > MAX_TITLE_LENGTH:
-        return jsonify({'success': False, 'message': f'Title too long (max {MAX_TITLE_LENGTH})'}), 400
+        return jsonify({'success': False, 'message': f'Title too long (max {MAX_TITLE_LENGTH} characters)'}), 400
     if text and len(text) > MAX_TEXT_LENGTH:
-        return jsonify({'success': False, 'message': f'Content too long (max {MAX_TEXT_LENGTH})'}), 400
-        
+        return jsonify({'success': False, 'message': f'Content too long (max {MAX_TEXT_LENGTH} characters)'}), 400
+
     media_filename = None
     media_type = None
-    
+
     if file and file.filename:
-        if not allowed_file(file.filename, file):
-            return jsonify({'success': False, 'message': 'Invalid file type or content'}), 400
-            
-        filename = secure_filename(file.filename)
-        unique_filename = f"{uuid.uuid4().hex}_{filename}"
+        is_valid, error_msg = allowed_file(file.filename, file, request.content_length or 0)
+        if not is_valid:
+            app.logger.warning(f"Blocked file upload: {file.filename}, reason: {error_msg}")
+            log_operation('upload_blocked', f'Blocked file: {file.filename}, reason: {error_msg}')
+            return jsonify({'success': False, 'message': error_msg}), 400
+
+        safe_filename = sanitize_filename(file.filename)
+        unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
         media_filename = unique_filename
-        
-        ext = filename.rsplit('.', 1)[1].lower()
-        if ext in ['jpg', 'jpeg', 'png', 'gif']:
+
+        ext = safe_filename.rsplit('.', 1)[1].lower()
+        if ext in IMAGE_EXTENSIONS:
             media_type = 'image'
-        elif ext in ['mp4', 'mov', 'avi']:
+        elif ext in VIDEO_EXTENSIONS:
             media_type = 'video'
-    
+
     try:
         memory = Memory(
             title=title,
             text_content=text,
             media_filename=media_filename,
             media_type=media_type,
+            status=status,
             author=current_user
         )
         db.session.add(memory)
         db.session.commit()
         app.logger.info(f"Memory created: {memory.id} by user {current_user.username}")
-        return jsonify({'success': True, 'id': memory.id})
+        log_operation('create_memory', f'Created memory: {title}', memory_id=memory.id)
+        return jsonify({'success': True, 'id': memory.id, 'view_url': memory.to_dict()['view_url']})
     except Exception as e:
         app.logger.error(f"Error creating memory: {str(e)}")
         return jsonify({'success': False, 'message': 'Internal server error'}), 500
@@ -233,97 +380,222 @@ def create_memory():
 @login_required
 def get_memory(memory_id):
     memory = Memory.query.get_or_404(memory_id)
-    # Check if user is author OR has permission (for now just author, or if decrypted)
-    # Since this is "Double Encryption", we assume if they hit this endpoint with auth, they can view it
-    # But strictly, only author should view UNLESS they decoded it.
-    # For MVP, we allow author to view directly.
-    # If decoding, the decoder will return the data.
+    if memory.user_id != current_user.id:
+        app.logger.warning(f"Unauthorized access attempt to memory {memory_id} by user {current_user.username}")
+        log_operation('unauthorized_access', f'Attempted to access memory {memory_id}', memory_id=memory_id)
+        return jsonify({'error': 'Forbidden'}), 403
+
+    log_operation('view_memory', f'Viewed memory: {memory.title}', memory_id=memory.id)
     return jsonify(memory.to_dict())
+
+@app.route('/api/memories/<memory_id>', methods=['PUT'])
+@login_required
+def update_memory(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        log_operation('unauthorized_edit', f'Attempted to edit memory {memory_id}', memory_id=memory_id)
+        return jsonify({'error': 'Forbidden'}), 403
+
+    title = request.form.get('title', '').strip()
+    text = request.form.get('text', '').strip()
+    file = request.files.get('file')
+    remove_media = request.form.get('remove_media', 'false').lower() == 'true'
+    new_status = request.form.get('status', '')
+
+    if title:
+        if len(title) > MAX_TITLE_LENGTH:
+            return jsonify({'success': False, 'message': f'Title too long (max {MAX_TITLE_LENGTH} characters)'}), 400
+        memory.title = title
+
+    if text is not None:
+        if len(text) > MAX_TEXT_LENGTH:
+            return jsonify({'success': False, 'message': f'Content too long (max {MAX_TEXT_LENGTH} characters)'}), 400
+        memory.text_content = text
+
+    if new_status and new_status in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
+        memory.status = new_status
+
+    if remove_media and memory.media_filename:
+        old_file = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
+        if os.path.exists(old_file):
+            os.remove(old_file)
+        memory.media_filename = None
+        memory.media_type = None
+
+    if file and file.filename:
+        is_valid, error_msg = allowed_file(file.filename, file, request.content_length or 0)
+        if not is_valid:
+            log_operation('upload_blocked', f'Blocked file: {file.filename}, reason: {error_msg}')
+            return jsonify({'success': False, 'message': error_msg}), 400
+
+        if memory.media_filename:
+            old_file = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
+            if os.path.exists(old_file):
+                os.remove(old_file)
+
+        safe_filename = sanitize_filename(file.filename)
+        unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+        memory.media_filename = unique_filename
+
+        ext = safe_filename.rsplit('.', 1)[1].lower()
+        if ext in IMAGE_EXTENSIONS:
+            memory.media_type = 'image'
+        elif ext in VIDEO_EXTENSIONS:
+            memory.media_type = 'video'
+
+    try:
+        memory.updated_at = datetime.utcnow()
+        db.session.commit()
+        app.logger.info(f"Memory updated: {memory.id} by user {current_user.username}")
+        log_operation('update_memory', f'Updated memory: {memory.title}', memory_id=memory.id)
+        return jsonify({'success': True, 'memory': memory.to_dict()})
+    except Exception as e:
+        app.logger.error(f"Error updating memory: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+@app.route('/api/memories/<memory_id>/status', methods=['PATCH'])
+@login_required
+def update_memory_status(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    data = request.json or {}
+    new_status = data.get('status', '')
+
+    if new_status not in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
+        return jsonify({'success': False, 'message': 'Invalid status'}), 400
+
+    old_status = memory.status
+    memory.status = new_status
+    memory.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    log_operation('status_change', f'Status changed from {old_status} to {new_status}', memory_id=memory.id)
+    return jsonify({'success': True, 'status': new_status})
 
 @app.route('/api/memories/<memory_id>', methods=['DELETE'])
 @login_required
 def delete_memory(memory_id):
     memory = Memory.query.get_or_404(memory_id)
     if memory.user_id != current_user.id:
+        log_operation('unauthorized_delete', f'Attempted to delete memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
-    
-    db.session.delete(memory)
-    db.session.commit()
-    return jsonify({'success': True})
+
+    memory_title = memory.title
+
+    try:
+        if memory.media_filename:
+            media_path = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
+            if os.path.exists(media_path):
+                os.remove(media_path)
+
+        if memory.qr_filename:
+            qr_path = os.path.join(app.config['QR_FOLDER'], memory.qr_filename)
+            if os.path.exists(qr_path):
+                os.remove(qr_path)
+
+        OperationLog.query.filter_by(memory_id=memory_id).update({'memory_id': None})
+
+        db.session.delete(memory)
+        db.session.commit()
+        app.logger.info(f"Memory deleted: {memory_id} by user {current_user.username}")
+        log_operation('delete_memory', f'Deleted memory: {memory_title}')
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error deleting memory: {str(e)}")
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'Internal server error'}), 500
 
 @app.route('/api/memories/<memory_id>/design', methods=['POST'])
 @login_required
 def design_qr(memory_id):
     memory = Memory.query.get_or_404(memory_id)
     if memory.user_id != current_user.id:
+        log_operation('unauthorized_qr_design', f'Attempted to design QR for memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
-        
+
     color = request.form.get('color', '#000000')
     bg_color = request.form.get('bg_color', '#ffffff')
     bg_file = request.files.get('bg_image')
     logo_file = request.files.get('logo_image')
-    
-    qr_content = memory.id 
-    qr = segno.make_qr(qr_content, error='h')
+
+    # Validate color format
+    if not re.match(r'^#[0-9A-Fa-f]{6}$', color):
+        return jsonify({'success': False, 'message': 'Invalid color format'}), 400
+    if not re.match(r'^#[0-9A-Fa-f]{6}$', bg_color):
+        return jsonify({'success': False, 'message': 'Invalid background color format'}), 400
+
+    # Validate background image if provided
+    if bg_file and bg_file.filename:
+        is_valid, err_msg = allowed_file(bg_file.filename, bg_file)
+        if not is_valid:
+            return jsonify({'success': False, 'message': f'Background image: {err_msg}'}), 400
+
+    # Validate logo image if provided
+    if logo_file and logo_file.filename:
+        is_valid, err_msg = allowed_file(logo_file.filename, logo_file)
+        if not is_valid:
+            return jsonify({'success': False, 'message': f'Logo image: {err_msg}'}), 400
+
+    view_url = request.host_url.rstrip('/') + app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
+    qr = segno.make_qr(view_url, error='h')
     qr_filename = f"qr_{memory.id}.png"
     qr_path = os.path.join(app.config['QR_FOLDER'], qr_filename)
-    
+
     try:
-        # 1. 生成基础二维码
         temp_qr_path = os.path.join(app.config['QR_FOLDER'], f"temp_{qr_filename}")
-        # 如果有背景图，二维码背景设为透明以便叠加
         qr_bg = None if (bg_file and bg_file.filename) else bg_color
         qr.save(temp_qr_path, scale=10, dark=color, light=qr_bg)
-        
+
         qrcode_img = Image.open(temp_qr_path).convert("RGBA")
-        
-        # 2. 如果有 Logo，先嵌入到二维码中心
+
         if logo_file and logo_file.filename:
             logo_temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_logo_{memory.id}.png")
             logo_file.save(logo_temp_path)
             logo = Image.open(logo_temp_path).convert("RGBA")
-            
-            # 计算 Logo 大小 (二维码大小的 1/4)
+
             logo_size = qrcode_img.width // 4
             logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-            
-            # 计算位置
-            pos = ((qrcode_img.width - logo_size) // 2, (qrcode_img.height - logo_size) // 2)
-            
-            # 创建一个带圆角的 Logo 背景 (可选，让 Logo 更清晰)
-            # 这里简单处理，直接粘贴
-            qrcode_img.paste(logo, pos, logo)
-            
-            if os.path.exists(logo_temp_path): os.remove(logo_temp_path)
 
-        # 3. 如果有背景图，将带 Logo 的二维码叠加到背景上
+            pos = ((qrcode_img.width - logo_size) // 2, (qrcode_img.height - logo_size) // 2)
+            qrcode_img.paste(logo, pos, logo)
+
+            if os.path.exists(logo_temp_path):
+                os.remove(logo_temp_path)
+
         if bg_file and bg_file.filename:
             bg_temp_name = f"temp_bg_{memory.id}.png"
             bg_temp_path = os.path.join(app.config['UPLOAD_FOLDER'], bg_temp_name)
             bg_file.save(bg_temp_path)
-            
+
             background = Image.open(bg_temp_path).convert("RGBA")
-            
-            # 背景图比二维码稍大一些
             target_size = (qrcode_img.width + 100, qrcode_img.height + 100)
             background = background.resize(target_size, Image.Resampling.LANCZOS)
-            
+
             pos = ((background.width - qrcode_img.width) // 2, (background.height - qrcode_img.height) // 2)
             background.paste(qrcode_img, pos, qrcode_img)
             background.save(qr_path)
-            
-            if os.path.exists(bg_temp_path): os.remove(bg_temp_path)
+
+            if os.path.exists(bg_temp_path):
+                os.remove(bg_temp_path)
         else:
-            # 没有背景图，直接保存带 Logo 的二维码
             qrcode_img.save(qr_path)
-            
-        if os.path.exists(temp_qr_path): os.remove(temp_qr_path)
-            
+
+        if os.path.exists(temp_qr_path):
+            os.remove(temp_qr_path)
+
         memory.qr_filename = qr_filename
+        memory.updated_at = datetime.utcnow()
         db.session.commit()
+
+        log_operation('design_qr', f'Designed QR code for memory: {memory.title}', memory_id=memory.id)
         return jsonify({'success': True, 'qr_url': f'/static/qrcodes/{qr_filename}'})
-        
+
     except Exception as e:
+        app.logger.error(f"QR design error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/decode', methods=['POST'])
@@ -331,29 +603,81 @@ def decode_qr():
     file = request.files.get('qr_image')
     if not file:
         return jsonify({'success': False, 'message': 'No file uploaded'}), 400
-        
-    filename = secure_filename(file.filename)
-    path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_decode_{filename}")
+
+    safe_filename = sanitize_filename(file.filename)
+    path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_decode_{uuid.uuid4().hex}_{safe_filename}")
     file.save(path)
-    
+
+    memory_id = None
     try:
         image = cv2.imread(path)
         detector = cv2.QRCodeDetector()
         data, bbox, _ = detector.detectAndDecode(image)
+
+        if data:
+            if data.startswith('http://') or data.startswith('https://') or data.startswith('/'):
+                if 'id=' in data:
+                    import urllib.parse
+                    if '?' in data:
+                        query_part = data.split('?', 1)[1]
+                        params = urllib.parse.parse_qs(query_part)
+                        memory_id = params.get('id', [None])[0]
+            else:
+                memory_id = data
     finally:
         if os.path.exists(path):
             os.remove(path)
-    
-    if data:
-        memory = Memory.query.get(data)
+
+    if memory_id:
+        memory = Memory.query.get(memory_id)
         if memory:
+            if memory.status != MEMORY_STATUS_ACTIVE:
+                log_operation('decode_inactive', f'Decoded inactive memory: {memory_id}', memory_id=memory_id, ip=request.remote_addr)
+                return jsonify({'success': False, 'message': 'This memory is not available'}), 404
+
+            log_operation('decode_success', f'Successfully decoded memory: {memory.title}', memory_id=memory_id, ip=request.remote_addr)
+
             if not current_user.is_authenticated:
-                return jsonify({'success': False, 'error': 'auth_required', 'memory_id': memory.id}), 401
-            return jsonify({'success': True, 'memory_id': memory.id})
+                view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
+                return jsonify({
+                    'success': False,
+                    'error': 'auth_required',
+                    'memory_id': memory.id,
+                    'redirect_url': view_url,
+                    'message': 'Please login to view this memory'
+                }), 401
+
+            return jsonify({'success': True, 'memory_id': memory.id, 'view_url': app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id})
         else:
+            log_operation('decode_invalid', f'Decoded invalid memory ID: {memory_id}', ip=request.remote_addr)
             return jsonify({'success': False, 'message': 'Invalid QR Code'}), 404
-    
+
+    log_operation('decode_failed', 'No QR code detected', ip=request.remote_addr)
     return jsonify({'success': False, 'message': 'No QR code detected'}), 400
+
+@app.route('/api/memories/<memory_id>/scan', methods=['POST'])
+def scan_memory(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+
+    if memory.status != MEMORY_STATUS_ACTIVE:
+        return jsonify({'success': False, 'message': 'This memory is not available'}), 404
+
+    log_operation('qr_scan', f'QR code scanned for memory: {memory.title}', memory_id=memory_id, ip=request.remote_addr)
+
+    if not current_user.is_authenticated:
+        view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
+        login_url = '/login.html?redirect=' + view_url
+        return jsonify({
+            'success': False,
+            'error': 'auth_required',
+            'login_url': login_url,
+            'memory_id': memory.id
+        }), 401
+
+    if memory.user_id != current_user.id:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+
+    return jsonify({'success': True, 'memory_id': memory.id})
 
 # Static file serving for Backend (images)
 @app.route('/static/<path:filename>')
@@ -361,14 +685,43 @@ def serve_static(filename):
     return send_from_directory('static', filename)
 
 # Initialize DB
-with app.app_context():
+def init_db():
     db.create_all()
+
+    from sqlalchemy import inspect, text
+    inspector = inspect(db.engine)
+
+    # Add status column to memory table if missing
+    if 'memory' in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('memory')]
+        if 'status' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE memory ADD COLUMN status VARCHAR(20) DEFAULT '{MEMORY_STATUS_ACTIVE}' NOT NULL"))
+                    conn.commit()
+                app.logger.info("Added 'status' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add status column: {e}")
+
+        if 'updated_at' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN updated_at DATETIME"))
+                    conn.commit()
+                app.logger.info("Added 'updated_at' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add updated_at column: {e}")
+
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():
         test_user = User(username='admin')
         test_user.set_password('password')
         db.session.add(test_user)
         db.session.commit()
+        app.logger.info("Created default admin user")
+
+with app.app_context():
+    init_db()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

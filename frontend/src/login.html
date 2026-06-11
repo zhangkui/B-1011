@@ -82,6 +82,7 @@
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         let mode = urlParams.get('mode') || 'login';
+        let redirectUrl = urlParams.get('redirect') || '';
         const formTitle = document.getElementById('form-title');
         const submitBtn = document.getElementById('submit-btn');
         const switchText = document.getElementById('switch-text');
@@ -89,6 +90,18 @@
         const authForm = document.getElementById('auth-form');
         const confirmPasswordGroup = document.getElementById('confirm-password-group');
         const confirmPasswordInput = document.getElementById('confirm_password');
+
+        function isSafeRedirect(url) {
+            if (!url) return false;
+            return url.startsWith('/') && !url.startsWith('//');
+        }
+
+        function getRedirectUrl() {
+            if (redirectUrl && isSafeRedirect(redirectUrl)) {
+                return redirectUrl;
+            }
+            return '/dashboard.html';
+        }
 
         function updateUI() {
             if (mode === 'register') {
@@ -106,47 +119,88 @@
                 confirmPasswordGroup.classList.add('hidden');
                 confirmPasswordInput.removeAttribute('required');
             }
+
+            if (redirectUrl && isSafeRedirect(redirectUrl)) {
+                const hint = document.createElement('p');
+                hint.className = 'text-xs text-gray-500 text-center mt-4';
+                hint.textContent = '登录后将自动跳转回之前的页面';
+                if (!document.getElementById('redirect-hint')) {
+                    hint.id = 'redirect-hint';
+                    authForm.parentNode.insertBefore(hint, authForm.nextSibling);
+                }
+            }
         }
 
         switchMode.addEventListener('click', (e) => {
             e.preventDefault();
             mode = mode === 'login' ? 'register' : 'login';
+            const newParams = new URLSearchParams();
+            newParams.set('mode', mode);
+            if (redirectUrl && isSafeRedirect(redirectUrl)) {
+                newParams.set('redirect', redirectUrl);
+            }
+            history.replaceState(null, '', '?' + newParams.toString());
             updateUI();
         });
 
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const username = document.getElementById('username').value;
+            const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
             const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+            const alertBox = document.getElementById('alert-box');
+
+            alertBox.classList.add('hidden');
 
             if (mode === 'register') {
                 const confirmPassword = confirmPasswordInput.value;
                 if (password !== confirmPassword) {
-                    const alertBox = document.getElementById('alert-box');
                     alertBox.textContent = '两次输入的密码不一致，请重试';
+                    alertBox.classList.remove('hidden');
+                    return;
+                }
+                if (password.length < 6) {
+                    alertBox.textContent = '密码至少需要6个字符';
+                    alertBox.classList.remove('hidden');
+                    return;
+                }
+                if (username.length < 3) {
+                    alertBox.textContent = '用户名至少需要3个字符';
                     alertBox.classList.remove('hidden');
                     return;
                 }
             }
 
+            const requestBody = { username, password };
+            if (redirectUrl && isSafeRedirect(redirectUrl)) {
+                requestBody.redirect = redirectUrl;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = mode === 'register' ? '注册中...' : '登录中...';
+
             try {
                 const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify(requestBody)
                 });
                 const data = await res.json();
-                
+
                 if (res.ok) {
-                    window.location.href = '/dashboard.html';
+                    const targetUrl = data.redirect || getRedirectUrl();
+                    window.location.href = targetUrl;
                 } else {
-                    const alertBox = document.getElementById('alert-box');
                     alertBox.textContent = data.message || '操作失败';
                     alertBox.classList.remove('hidden');
                 }
             } catch (err) {
                 console.error(err);
+                alertBox.textContent = '网络错误，请重试';
+                alertBox.classList.remove('hidden');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = mode === 'register' ? '注册' : '登录';
             }
         });
 
