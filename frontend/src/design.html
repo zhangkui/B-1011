@@ -279,6 +279,10 @@
                                     <p class="text-xs text-gray-500 mb-2">在二维码中心嵌入 Logo，建议使用方形图片</p>
                                     <input type="file" name="logo_image" accept="image/*" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-neon file:text-white hover:file:bg-pink-400">
                                     <p id="logo-has-file" class="text-xs text-green-400 mt-2 hidden">✓ 已上传 Logo 图片</p>
+                                    <div id="logo-preview-container" class="mt-4 hidden">
+                                        <p class="text-xs text-gray-400 mb-2">当前 Logo 预览：</p>
+                                        <img id="logo-preview" class="w-24 h-24 rounded-lg border border-gray-600 object-contain bg-white">
+                                    </div>
                                 </div>
 
                                 <details open class="mb-4">
@@ -388,6 +392,10 @@
                                     <p class="text-xs text-gray-500 mb-2">上传一张图片作为背景图层</p>
                                     <input type="file" name="bg_image" accept="image/*" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-light file:text-cyber-dark hover:file:bg-blue-400">
                                     <p id="bg-has-file" class="text-xs text-green-400 mt-2 hidden">✓ 已上传背景图片</p>
+                                    <div id="bg-preview-container" class="mt-4 hidden">
+                                        <p class="text-xs text-gray-400 mb-2">当前背景图预览：</p>
+                                        <img id="bg-preview" class="w-full max-w-xs h-32 rounded-lg border border-gray-600 object-cover">
+                                    </div>
                                 </div>
 
                                 <div class="bg-cyber-card/50 rounded-lg p-4 text-sm text-gray-400">
@@ -510,11 +518,31 @@
         document.querySelector('input[name="logo_image"]').addEventListener('change', (e) => {
             hasLogo = e.target.files && e.target.files.length > 0;
             document.getElementById('logo-has-file').classList.toggle('hidden', !hasLogo);
+            if (hasLogo) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    document.getElementById('logo-preview').src = event.target.result;
+                    document.getElementById('logo-preview-container').classList.remove('hidden');
+                };
+                reader.readAsDataURL(e.target.files[0]);
+            } else {
+                document.getElementById('logo-preview-container').classList.add('hidden');
+            }
         });
 
         document.querySelector('input[name="bg_image"]').addEventListener('change', (e) => {
             hasBgImage = e.target.files && e.target.files.length > 0;
             document.getElementById('bg-has-file').classList.toggle('hidden', !hasBgImage);
+            if (hasBgImage) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    document.getElementById('bg-preview').src = event.target.result;
+                    document.getElementById('bg-preview-container').classList.remove('hidden');
+                };
+                reader.readAsDataURL(e.target.files[0]);
+            } else {
+                document.getElementById('bg-preview-container').classList.add('hidden');
+            }
         });
 
         function updateQuality(quality) {
@@ -579,7 +607,7 @@
                 if(data.qr_url) {
                     updatePreview(data.qr_url);
                     if (data.design_config) {
-                        applyDesignConfig(data.design_config);
+                        applyDesignConfig(data.design_config, data.logo_url, data.bg_url);
                     }
                     if (data.qr_quality_score) {
                         updateQuality({
@@ -591,7 +619,7 @@
                 }
             });
 
-        function applyDesignConfig(config) {
+        function applyDesignConfig(config, logoUrl, bgUrl) {
             if (config.template) {
                 currentTemplate = config.template;
                 document.querySelector('input[name="template"]').value = config.template;
@@ -622,11 +650,19 @@
                 hasLogo = true;
                 document.getElementById('logo-has-file').classList.remove('hidden');
                 document.getElementById('logo-has-file').textContent = '✓ 已有 Logo（重新上传将替换）';
+                if (logoUrl) {
+                    document.getElementById('logo-preview').src = logoUrl + '?t=' + Date.now();
+                    document.getElementById('logo-preview-container').classList.remove('hidden');
+                }
             }
             if (config.has_bg_image) {
                 hasBgImage = true;
                 document.getElementById('bg-has-file').classList.remove('hidden');
                 document.getElementById('bg-has-file').textContent = '✓ 已有背景图（重新上传将替换）';
+                if (bgUrl) {
+                    document.getElementById('bg-preview').src = bgUrl + '?t=' + Date.now();
+                    document.getElementById('bg-preview-container').classList.remove('hidden');
+                }
             }
             updateRangeLabels();
         }
@@ -649,7 +685,7 @@
                 if (data.success) {
                     updatePreview(data.qr_url, data.quality_score);
                     if (data.design_config) {
-                        applyDesignConfig(data.design_config);
+                        applyDesignConfig(data.design_config, data.logo_url, data.bg_url);
                     }
                     exportVariants = null;
                 } else {

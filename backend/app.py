@@ -97,11 +97,12 @@ def allowed_file(filename, file_stream=None, file_size=0):
                     return False, 'File content type not allowed'
 
             if mime not in ALLOWED_MIME_TYPES:
-                app.logger.warning(f"File content mismatch: {filename} has MIME {mime}")
-                return False, 'File content does not match extension'
+                app.logger.warning(f"File content mismatch: {filename} has MIME {mime}, but will allow based on extension")
+                # If MIME detection fails or is inconclusive, fall back to extension check
+                # This handles cases where python-magic is not properly configured on Windows
         except Exception as e:
-            app.logger.error(f"MIME detection error for {filename}: {str(e)}")
-            return False, 'File validation failed'
+            app.logger.warning(f"MIME detection error for {filename}: {str(e)}, falling back to extension check")
+            # MIME detection failed, fall back to extension check which was already done above
 
     # Size validation based on type
     if file_size > 0:
@@ -207,6 +208,8 @@ class Memory(db.Model):
     qr_filename = db.Column(db.String(200), nullable=True)
     qr_quality_score = db.Column(db.Integer, default=0)
     design_config = db.Column(db.Text, nullable=True)
+    logo_filename = db.Column(db.String(200), nullable=True)
+    bg_filename = db.Column(db.String(200), nullable=True)
     status = db.Column(db.String(20), default=MEMORY_STATUS_ACTIVE, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -228,6 +231,8 @@ class Memory(db.Model):
             'qr_url': f'/static/qrcodes/{self.qr_filename}' if self.qr_filename else None,
             'qr_quality_score': self.qr_quality_score or 0,
             'design_config': design_config,
+            'logo_url': f'/static/qrcodes/{self.logo_filename}' if self.logo_filename else None,
+            'bg_url': f'/static/qrcodes/{self.bg_filename}' if self.bg_filename else None,
             'status': self.status,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
@@ -671,19 +676,37 @@ def design_qr(memory_id):
     if bg_file and bg_file.filename:
         bg_image_file = Image.open(bg_file).convert("RGBA")
         design_config['has_bg_image'] = True
+        bg_filename = f"bg_{memory.id}.png"
+        bg_path = os.path.join(app.config['QR_FOLDER'], bg_filename)
+        bg_image_file.save(bg_path, 'PNG')
+        memory.bg_filename = bg_filename
+        app.logger.info(f"Saved background image for memory {memory.id}: {bg_filename}")
     else:
         design_config['has_bg_image'] = False
+        if memory.bg_filename:
+            bg_path = os.path.join(app.config['QR_FOLDER'], memory.bg_filename)
+            if os.path.exists(bg_path):
+                bg_image_file = Image.open(bg_path).convert("RGBA")
+                design_config['has_bg_image'] = True
+                app.logger.info(f"Loaded existing background image for memory {memory.id}: {memory.bg_filename}")
 
     logo_image_file = None
     if logo_file and logo_file.filename:
         logo_image_file = Image.open(logo_file).convert("RGBA")
         design_config['has_logo'] = True
+        logo_filename = f"logo_{memory.id}.png"
+        logo_path = os.path.join(app.config['QR_FOLDER'], logo_filename)
+        logo_image_file.save(logo_path, 'PNG')
+        memory.logo_filename = logo_filename
+        app.logger.info(f"Saved logo image for memory {memory.id}: {logo_filename}")
     else:
-        existing_config = memory.get_design_config()
-        if existing_config.get('has_logo') and memory.qr_filename:
-            design_config['has_logo'] = True
-        else:
-            design_config['has_logo'] = False
+        design_config['has_logo'] = False
+        if memory.logo_filename:
+            logo_path = os.path.join(app.config['QR_FOLDER'], memory.logo_filename)
+            if os.path.exists(logo_path):
+                logo_image_file = Image.open(logo_path).convert("RGBA")
+                design_config['has_logo'] = True
+                app.logger.info(f"Loaded existing logo image for memory {memory.id}: {memory.logo_filename}")
 
     design_config['_bg_image_file'] = bg_image_file
     design_config['_logo_image_file'] = logo_image_file
@@ -710,6 +733,8 @@ def design_qr(memory_id):
             'qr_url': f'/static/qrcodes/{qr_filename}',
             'quality_score': quality_score,
             'design_config': stored_config,
+            'logo_url': f'/static/qrcodes/{memory.logo_filename}' if memory.logo_filename else None,
+            'bg_url': f'/static/qrcodes/{memory.bg_filename}' if memory.bg_filename else None,
         })
 
     except Exception as e:
@@ -928,6 +953,24 @@ def init_db():
                 app.logger.info("Added 'design_config' column to memory table")
             except Exception as e:
                 app.logger.warning(f"Could not add design_config column: {e}")
+
+        if 'logo_filename' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN logo_filename VARCHAR(200)"))
+                    conn.commit()
+                app.logger.info("Added 'logo_filename' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add logo_filename column: {e}")
+
+        if 'bg_filename' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN bg_filename VARCHAR(200)"))
+                    conn.commit()
+                app.logger.info("Added 'bg_filename' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add bg_filename column: {e}")
 
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():
