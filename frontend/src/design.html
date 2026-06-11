@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设计二维码 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12">
+            <!-- Preview Section -->
+            <div>
+                <h2 class="text-2xl font-bold mb-6">预览</h2>
+                <div class="glass p-8 rounded-2xl flex items-center justify-center min-h-[400px]">
+                    <div id="qr-preview" class="text-gray-500 text-center">
+                        <p>生成二维码后在此显示。</p>
+                    </div>
+                </div>
+                <div id="download-section" class="mt-6 text-center hidden">
+                    <a id="download-link" href="#" download="memory_qr.png" class="inline-block border border-cyber-light text-cyber-light px-6 py-2 rounded-full hover:bg-cyber-light/10 transition">
+                        下载二维码图片
+                    </a>
+                </div>
+            </div>
+
+            <!-- Controls Section -->
+            <div>
+                <h2 class="text-2xl font-bold mb-6">设计二维码</h2>
+                <div class="glass p-8 rounded-2xl">
+                    <form id="design-form">
+                        
+                        <div class="grid grid-cols-2 gap-4 mb-6">
+                            <div>
+                                <label class="block text-gray-400 text-sm font-bold mb-2">二维码颜色</label>
+                                <input type="color" name="color" value="#000000" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                            </div>
+                            <div>
+                                <label class="block text-gray-400 text-sm font-bold mb-2">背景颜色</label>
+                                <input type="color" name="bg_color" value="#ffffff" class="w-full h-10 rounded cursor-pointer bg-transparent border-0">
+                            </div>
+                        </div>
+                        
+                        <div class="mb-6">
+                            <label class="block text-gray-400 text-sm font-bold mb-2">背景图片 (可选)</label>
+                            <p class="text-xs text-gray-500 mb-2">上传一张图片嵌入到二维码背后。</p>
+                            <input type="file" name="bg_image" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-light file:text-cyber-dark hover:file:bg-blue-400">
+                        </div>
+
+                        <div class="mb-8">
+                            <label class="block text-gray-400 text-sm font-bold mb-2">Logo 嵌入 (可选)</label>
+                            <p class="text-xs text-gray-500 mb-2">在二维码中心嵌入一个 Logo 图片。</p>
+                            <input type="file" name="logo_image" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyber-neon file:text-white hover:file:bg-pink-400">
+                        </div>
+                        
+                        <button class="w-full bg-cyber-light text-cyber-dark font-bold py-3 px-4 rounded-lg hover:bg-blue-400 transition" type="submit">
+                            生成 / 更新 二维码
+                        </button>
+                    </form>
+                    
+                    <div class="mt-8 pt-8 border-t border-gray-700">
+                         <a id="view-link" href="#" class="block text-center text-gray-400 hover:text-white">跳过，直接查看记忆 &rarr;</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <script src="/static/js/main.js"></script>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const memoryId = urlParams.get('id');
+        if(!memoryId) window.location.href = '/dashboard.html';
+
+        document.getElementById('view-link').href = `/view_memory.html?id=${memoryId}`;
+
+        // Initial Load to see if QR exists
+        fetch(`/api/memories/${memoryId}`)
+            .then(res => res.json())
+            .then(data => {
+                if(data.qr_url) {
+                    updatePreview(data.qr_url);
+                }
+            });
+
+        function updatePreview(url) {
+            const preview = document.getElementById('qr-preview');
+            preview.innerHTML = `<img src="${url}?t=${new Date().getTime()}" alt="Current QR" class="rounded-lg shadow-2xl max-w-full">`;
+            const dlSection = document.getElementById('download-section');
+            const dlLink = document.getElementById('download-link');
+            dlSection.classList.remove('hidden');
+            dlLink.href = url;
+        }
+
+        document.getElementById('design-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/design`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    updatePreview(data.qr_url);
+                } else {
+                    alert('生成失败');
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+</html>

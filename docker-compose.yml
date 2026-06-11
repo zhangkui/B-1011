@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: 
+      context: ./backend
+    container_name: memory_qr_backend
+    volumes:
+      - ./backend:/app
+      - ./backend/static:/app/static
+      - db_data:/app/instance
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+    networks:
+      - memory-network
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: memory_qr_frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend/src:/usr/share/nginx/html
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - backend
+    networks:
+      - memory-network
+
+networks:
+  memory-network:
+    driver: bridge
+
+volumes:
+  db_data:

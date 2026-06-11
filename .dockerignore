@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+instance/
+.git/
+.gitignore
+.dockerignore
+static/uploads/*
+static/qrcodes/*
+!static/uploads/.gitkeep
+!static/qrcodes/.gitkeep

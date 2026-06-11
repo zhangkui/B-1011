@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>查看记忆 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div class="max-w-3xl mx-auto">
+            <div class="mb-8">
+                <a href="/dashboard.html" class="text-gray-400 hover:text-white flex items-center gap-2 text-sm">
+                    &larr; 返回我的记忆
+                </a>
+            </div>
+
+            <div class="glass rounded-2xl overflow-hidden shadow-2xl border-t-4 border-cyber-neon" id="memory-container">
+                <div class="p-12 text-center text-gray-500">加载中...</div>
+            </div>
+        </div>
+    </main>
+    <script src="/static/js/main.js"></script>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const memoryId = urlParams.get('id');
+
+        async function loadMemory() {
+            try {
+                const res = await fetch(`/api/memories/${memoryId}`);
+                if (res.status === 401) {
+                    window.location.href = '/login.html';
+                    return;
+                }
+                if (!res.ok) {
+                    document.getElementById('memory-container').innerHTML = '<div class="p-12 text-center text-red-500">无法加载记忆或无权访问</div>';
+                    return;
+                }
+
+                const m = await res.json();
+                const container = document.getElementById('memory-container');
+                
+                let mediaHtml = '';
+                if (m.media_url) {
+                    if (m.media_type === 'image') {
+                        mediaHtml = `<div class="mb-8 rounded-xl overflow-hidden shadow-lg"><img src="${m.media_url}" alt="Memory Media" class="w-full h-auto"></div>`;
+                    } else if (m.media_type === 'video') {
+                        mediaHtml = `<div class="mb-8 rounded-xl overflow-hidden shadow-lg"><video controls class="w-full"><source src="${m.media_url}">Your browser does not support the video tag.</video></div>`;
+                    }
+                }
+
+                container.innerHTML = `
+                    <div class="p-8 md:p-12">
+                        <h1 class="text-4xl md:text-5xl font-bold mb-6 gradient-text">${m.title}</h1>
+                        
+                        <div class="text-sm text-gray-500 mb-8 flex items-center gap-4">
+                            <span>${m.created_at}</span>
+                            <span class="w-1 h-1 bg-gray-600 rounded-full"></span>
+                            <span>By ${m.author}</span>
+                        </div>
+
+                        ${mediaHtml}
+
+                        ${m.text_content ? `<div class="prose prose-invert prose-lg max-w-none text-gray-300">${m.text_content}</div>` : ''}
+                    </div>
+                    
+                    <div class="bg-gray-900/50 p-6 flex justify-between items-center">
+                         <div class="text-xs text-gray-500 font-mono">ID: ${m.id}</div>
+                         <a href="/design.html?id=${m.id}" class="text-cyber-light text-sm hover:underline">重新设计二维码</a>
+                    </div>
+                `;
+
+            } catch (err) {
+                console.error(err);
+            }
+        }
+        
+        if (memoryId) loadMemory();
+    </script>
+</body>
+</html>

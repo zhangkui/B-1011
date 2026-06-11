@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 / 注册 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8 flex items-center justify-center">
+        <div class="max-w-md w-full glass p-8 rounded-2xl shadow-2xl">
+            <h2 class="text-3xl font-bold text-center mb-8" id="form-title">欢迎回来</h2>
+            
+            <div id="alert-box" class="hidden mb-4 p-3 rounded bg-red-500/20 text-red-200 border border-red-500/50 text-sm text-center"></div>
+
+            <form id="auth-form">
+                <div class="mb-6">
+                    <label class="block text-gray-400 text-sm font-bold mb-2" for="username">用户名</label>
+                    <input class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light focus:ring-1 focus:ring-cyber-light" 
+                           type="text" id="username" name="username" required>
+                </div>
+                
+                <div class="mb-8">
+                    <label class="block text-gray-400 text-sm font-bold mb-2" for="password">密码</label>
+                    <input class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light focus:ring-1 focus:ring-cyber-light" 
+                           type="password" id="password" name="password" required>
+                </div>
+
+                <div class="mb-8 hidden" id="confirm-password-group">
+                    <label class="block text-gray-400 text-sm font-bold mb-2" for="confirm_password">确认密码</label>
+                    <input class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light focus:ring-1 focus:ring-cyber-light" 
+                           type="password" id="confirm_password" name="confirm_password">
+                </div>
+                
+                <button type="submit" class="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-bold py-3 px-4 rounded-lg transition transform hover:scale-[1.02]" id="submit-btn">
+                    登录
+                </button>
+            </form>
+            
+            <div class="mt-6 text-center text-sm text-gray-400">
+                <span id="switch-text">还没账号?</span> 
+                <a href="#" id="switch-mode" class="text-cyber-light hover:underline">创建账号</a>
+            </div>
+        </div>
+    </main>
+    <script src="/static/js/main.js"></script>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        let mode = urlParams.get('mode') || 'login';
+        const formTitle = document.getElementById('form-title');
+        const submitBtn = document.getElementById('submit-btn');
+        const switchText = document.getElementById('switch-text');
+        const switchMode = document.getElementById('switch-mode');
+        const authForm = document.getElementById('auth-form');
+        const confirmPasswordGroup = document.getElementById('confirm-password-group');
+        const confirmPasswordInput = document.getElementById('confirm_password');
+
+        function updateUI() {
+            if (mode === 'register') {
+                formTitle.textContent = '加入 Memory QR';
+                submitBtn.textContent = '注册';
+                switchText.textContent = '已有账号?';
+                switchMode.textContent = '登录';
+                confirmPasswordGroup.classList.remove('hidden');
+                confirmPasswordInput.setAttribute('required', 'required');
+            } else {
+                formTitle.textContent = '欢迎回来';
+                submitBtn.textContent = '登录';
+                switchText.textContent = '还没账号?';
+                switchMode.textContent = '创建账号';
+                confirmPasswordGroup.classList.add('hidden');
+                confirmPasswordInput.removeAttribute('required');
+            }
+        }
+
+        switchMode.addEventListener('click', (e) => {
+            e.preventDefault();
+            mode = mode === 'login' ? 'register' : 'login';
+            updateUI();
+        });
+
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+
+            if (mode === 'register') {
+                const confirmPassword = confirmPasswordInput.value;
+                if (password !== confirmPassword) {
+                    const alertBox = document.getElementById('alert-box');
+                    alertBox.textContent = '两次输入的密码不一致，请重试';
+                    alertBox.classList.remove('hidden');
+                    return;
+                }
+            }
+
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                
+                if (res.ok) {
+                    window.location.href = '/dashboard.html';
+                } else {
+                    const alertBox = document.getElementById('alert-box');
+                    alertBox.textContent = data.message || '操作失败';
+                    alertBox.classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        });
+
+        updateUI();
+    </script>
+</body>
+</html>

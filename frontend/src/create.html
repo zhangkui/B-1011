@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>创建记忆 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div class="max-w-2xl mx-auto">
+            <div class="mb-8">
+                <a href="/dashboard.html" class="text-gray-400 hover:text-white flex items-center gap-2 text-sm">
+                    &larr; 返回我的记忆
+                </a>
+            </div>
+
+            <div class="glass p-8 rounded-2xl">
+                <h2 class="text-3xl font-bold mb-8">存储记忆</h2>
+                
+                <form id="create-form">
+                    <div class="mb-6">
+                        <label class="block text-gray-400 text-sm font-bold mb-2" for="title">标题</label>
+                        <input class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light" 
+                               type="text" id="title" name="title" required placeholder="例如：2025年夏日旅行">
+                    </div>
+                    
+                    <div class="mb-6">
+                        <label class="block text-gray-400 text-sm font-bold mb-2" for="text">故事 / 留言</label>
+                        <textarea class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light h-32" 
+                                  id="text" name="text" placeholder="写下一些有意义的文字..."></textarea>
+                    </div>
+                    
+                    <div class="mb-8">
+                        <label class="block text-gray-400 text-sm font-bold mb-2" for="file">媒体文件 (图片/视频)</label>
+                        <div class="relative border-2 border-dashed border-gray-600 rounded-lg p-8 text-center hover:border-cyber-light transition cursor-pointer group" id="drop-zone">
+                            <input type="file" id="file" name="file" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" accept="image/*,video/*">
+                            
+                            <!-- Initial Placeholder -->
+                            <div id="upload-placeholder" class="text-gray-400 group-hover:text-cyber-light transition-colors">
+                                <svg class="w-10 h-10 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                                <span class="block text-sm font-medium">点击上传或拖拽文件到这里</span>
+                                <span class="block text-xs text-gray-500 mt-2">支持 MP4, JPG, PNG (最大 64MB)</span>
+                            </div>
+
+                            <!-- File Preview -->
+                            <div id="file-preview" class="hidden flex flex-col items-center justify-center">
+                                <div id="preview-media" class="mb-4 max-h-64 overflow-hidden rounded-lg shadow-lg border border-gray-700"></div>
+                                <div class="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-full">
+                                    <svg class="w-4 h-4 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                    <span id="file-name" class="text-sm text-gray-200 truncate max-w-xs"></span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-2">点击可更换文件</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button class="w-full bg-cyber-light text-cyber-dark font-bold py-3 px-4 rounded-lg hover:bg-blue-400 transition" type="submit">
+                        下一步：设计二维码 &rarr;
+                    </button>
+                </form>
+            </div>
+        </div>
+    </main>
+    <script src="/static/js/main.js"></script>
+    <script>
+        // Check Auth immediately
+        fetch('/api/auth/status')
+            .then(res => res.json())
+            .then(data => {
+                if (!data.authenticated) {
+                    window.location.href = '/login.html';
+                }
+            });
+
+        // File Upload Preview Logic
+        const fileInput = document.getElementById('file');
+        const placeholder = document.getElementById('upload-placeholder');
+        const preview = document.getElementById('file-preview');
+        const previewMedia = document.getElementById('preview-media');
+        const fileName = document.getElementById('file-name');
+        const dropZone = document.getElementById('drop-zone');
+
+        fileInput.addEventListener('change', function(e) {
+            handleFileSelect(e.target.files[0]);
+        });
+
+        // Drag and drop visual feedback
+        dropZone.addEventListener('dragenter', () => dropZone.classList.add('border-cyber-light', 'bg-gray-800/50'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-cyber-light', 'bg-gray-800/50'));
+        dropZone.addEventListener('drop', () => dropZone.classList.remove('border-cyber-light', 'bg-gray-800/50'));
+
+        function handleFileSelect(file) {
+            if (!file) return;
+
+            fileName.textContent = file.name;
+            previewMedia.innerHTML = ''; // Clear previous
+
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.className = 'max-h-64 rounded-lg object-contain';
+                    previewMedia.appendChild(img);
+                }
+                reader.readAsDataURL(file);
+            } else if (file.type.startsWith('video/')) {
+                const videoIcon = document.createElement('div');
+                videoIcon.className = 'flex flex-col items-center justify-center p-8 bg-gray-800 rounded-lg';
+                videoIcon.innerHTML = `
+                    <svg class="w-16 h-16 text-cyber-light mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    <span class="text-gray-400 text-sm">视频文件已选择</span>
+                `;
+                previewMedia.appendChild(videoIcon);
+            } else {
+                const fileIcon = document.createElement('div');
+                fileIcon.className = 'flex flex-col items-center justify-center p-8 bg-gray-800 rounded-lg';
+                fileIcon.innerHTML = `
+                    <svg class="w-16 h-16 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    <span class="text-gray-400 text-sm">文件已选择</span>
+                `;
+                previewMedia.appendChild(fileIcon);
+            }
+
+            placeholder.classList.add('hidden');
+            preview.classList.remove('hidden');
+        }
+
+        document.getElementById('create-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            try {
+                const res = await fetch('/api/memories', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    window.location.href = `/design.html?id=${data.id}`;
+                } else {
+                    alert('创建失败，请重试');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('网络错误');
+            }
+        });
+    </script>
+</body>
+</html>

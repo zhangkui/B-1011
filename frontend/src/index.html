@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory QR - 记忆二维码</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <!-- Navbar -->
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links">
+                        <!-- Loaded by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div id="alert-box" class="hidden mb-8 p-4 rounded-md"></div>
+        <div class="text-center py-16">
+            <h1 class="text-5xl md:text-7xl font-bold mb-6">
+                <span class="gradient-text">解锁回忆</span>
+            </h1>
+            <p class="text-xl text-gray-300 mb-12 max-w-2xl mx-auto">
+                二维码不仅仅是链接，更是通往你私密记忆的加密钥匙。
+                设计、加密、并以实体形式分享。
+            </p>
+            
+            <div class="flex justify-center gap-6 mb-20">
+                <a href="#" onclick="handleCreateClick(event)" class="bg-cyber-light text-cyber-dark px-8 py-3 rounded-full font-bold text-lg hover:bg-blue-400 transition transform hover:scale-105 shadow-lg shadow-blue-500/50">
+                    创建记忆
+                </a>
+                <a href="/decode.html" class="border border-cyber-light text-cyber-light px-8 py-3 rounded-full font-bold text-lg hover:bg-cyber-light/10 transition transform hover:scale-105">
+                    解码二维码
+                </a>
+            </div>
+
+            <!-- Features -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+                <div class="glass p-8 rounded-2xl hover:border-cyber-light transition duration-300">
+                    <div class="h-12 w-12 bg-cyber-light/20 rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">双重加密</h3>
+                    <p class="text-gray-400">你的记忆是安全的。只有授权用户才能解码内容。这不仅是一个链接，更是一个保险箱。</p>
+                </div>
+
+                <div class="glass p-8 rounded-2xl hover:border-cyber-neon transition duration-300">
+                    <div class="h-12 w-12 bg-cyber-neon/20 rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"></path></svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">艺术设计</h3>
+                    <p class="text-gray-400">自定义二维码颜色、Logo和背景图片，使其成为一件艺术品。</p>
+                </div>
+
+                <div class="glass p-8 rounded-2xl hover:border-purple-500 transition duration-300 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 bg-purple-500 text-xs font-bold px-2 py-1 rounded-bl-lg">即将上线</div>
+                    <div class="h-12 w-12 bg-purple-500/20 rounded-lg flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-2">实体商店</h3>
+                    <p class="text-gray-400">订购印有你记忆二维码的高级贴纸、金属卡片或时光胶囊。</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="glass mt-auto py-6">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-400 text-sm">
+            &copy; 2026 Memory QR. Encrypt your moments.
+        </div>
+    </footer>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
