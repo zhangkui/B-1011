@@ -67,7 +67,7 @@
             <div class="glass rounded-2xl overflow-hidden">
                 <div class="flex border-b border-white/10 overflow-x-auto" id="tab-bar">
                     <button class="tab-active px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="members" onclick="switchTab('members')">成员管理</button>
-                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="invite" onclick="switchTab('invite')">邀请协作</button>
+                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="invite" id="tab-invite" onclick="switchTab('invite')">邀请协作</button>
                     <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="requests" id="tab-requests" onclick="switchTab('requests')">申请审核</button>
                     <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="logs" onclick="switchTab('logs')">协作记录</button>
                     <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="comments" onclick="switchTab('comments')">留言板</button>
@@ -121,6 +121,9 @@
         }
 
         function switchTab(tab) {
+            if (tab === 'requests' && myRole !== 'owner') return;
+            if (tab === 'invite' && myRole !== 'owner' && myRole !== 'editor') return;
+
             currentTab = tab;
             document.querySelectorAll('#tab-bar button').forEach(btn => {
                 btn.className = btn.dataset.tab === tab
@@ -171,6 +174,9 @@
 
             if (myRole !== 'owner') {
                 document.getElementById('tab-requests').style.display = 'none';
+            }
+            if (myRole !== 'owner' && myRole !== 'editor') {
+                document.getElementById('tab-invite').style.display = 'none';
             }
 
             loadTabContent('members');

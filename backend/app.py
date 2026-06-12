@@ -326,12 +326,14 @@ class Collaborator(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    invitation_id = db.Column(db.Integer, db.ForeignKey('invitation.id'), nullable=True)
     role = db.Column(db.String(20), default=COLLAB_ROLE_VIEWER, nullable=False)
     status = db.Column(db.String(20), default='active', nullable=False)
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     memory = db.relationship('Memory', backref='collaborators')
     user = db.relationship('User', backref='collaborations')
+    invitation = db.relationship('Invitation', backref='collaborators')
 
     def to_dict(self):
         return {
@@ -1334,6 +1336,7 @@ def approve_join_request(request_id):
     collab = Collaborator(
         memory_id=join_req.memory_id,
         user_id=join_req.user_id,
+        invitation_id=join_req.invitation_id,
         role=join_req.role,
         status='active'
     )
@@ -1433,6 +1436,12 @@ def remove_member(memory_id, collab_id):
 
     username = collab.user.username if collab.user else '未知用户'
     collab.status = 'removed'
+
+    if collab.invitation_id:
+        inv = Invitation.query.get(collab.invitation_id)
+        if inv and inv.use_count > 0:
+            inv.use_count -= 1
+
     db.session.commit()
 
     log_collab_action(memory_id, 'remove_member', f'移除协作者 {username}')
@@ -1448,6 +1457,12 @@ def leave_collaboration(memory_id):
         return jsonify({'success': False, 'message': '您不是该记忆的协作者'}), 400
 
     collab.status = 'left'
+
+    if collab.invitation_id:
+        inv = Invitation.query.get(collab.invitation_id)
+        if inv and inv.use_count > 0:
+            inv.use_count -= 1
+
     db.session.commit()
 
     log_collab_action(memory_id, 'leave_collab', f'{current_user.username} 退出协作')
@@ -1662,6 +1677,18 @@ def init_db():
                 app.logger.info("Added 'visibility' column to memory table")
             except Exception as e:
                 app.logger.warning(f"Could not add visibility column: {e}")
+
+    # Add invitation_id column to collaborator table if missing
+    if 'collaborator' in inspector.get_table_names():
+        collab_columns = [col['name'] for col in inspector.get_columns('collaborator')]
+        if 'invitation_id' not in collab_columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE collaborator ADD COLUMN invitation_id INTEGER REFERENCES invitation(id)"))
+                    conn.commit()
+                app.logger.info("Added 'invitation_id' column to collaborator table")
+            except Exception as e:
+                app.logger.warning(f"Could not add invitation_id column: {e}")
 
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():
