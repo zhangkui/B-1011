@@ -24,6 +24,7 @@ async function checkAuth() {
                 <a href="/decode.html" class="hover:text-cyber-light px-3 py-2 rounded-md text-sm font-medium">解码</a>
                 <a href="/dashboard.html" class="hover:text-cyber-light px-3 py-2 rounded-md text-sm font-medium">我的记忆</a>
                 <a href="/create.html" class="hover:text-cyber-light px-3 py-2 rounded-md text-sm font-medium">创建</a>
+                <a href="/join.html" class="hover:text-cyber-light px-3 py-2 rounded-md text-sm font-medium">加入协作</a>
                 <span class="text-gray-500 px-3 text-sm">|</span>
                 <span class="text-cyber-neon font-bold px-3 text-sm">${data.username}</span>
                 <a href="#" onclick="logout(event)" class="text-gray-400 hover:text-white px-3 py-2 rounded-md text-sm font-medium">退出</a>

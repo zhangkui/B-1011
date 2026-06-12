@@ -4,6 +4,8 @@ import logging
 import magic
 import re
 import json
+import string
+import random
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, abort, url_for
@@ -235,12 +237,20 @@ class Memory(db.Model):
             return True
         if user and user.is_authenticated and user.id == self.user_id:
             return True
+        if user and user.is_authenticated:
+            collab = Collaborator.query.filter_by(
+                memory_id=self.id, user_id=user.id, status='active'
+            ).first()
+            if collab:
+                return True
         return False
 
     def to_dict(self, viewer=None):
         design_config = self.get_design_config()
         locked = self.is_locked()
         can_view = self.can_view(viewer)
+
+        collab_count = Collaborator.query.filter_by(memory_id=self.id, status='active').count()
 
         result = {
             'id': self.id,
@@ -255,7 +265,8 @@ class Memory(db.Model):
             'author': self.author.username,
             'author_id': self.user_id,
             'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}',
-            'full_view_url': build_view_url(self.id)
+            'full_view_url': build_view_url(self.id),
+            'collaborator_count': collab_count
         }
 
         if not locked and can_view:
@@ -297,6 +308,184 @@ class OperationLog(db.Model):
             'ip': self.ip,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S')
         }
+
+COLLAB_ROLE_OWNER = 'owner'
+COLLAB_ROLE_EDITOR = 'editor'
+COLLAB_ROLE_VIEWER = 'viewer'
+COLLAB_ROLE_COMMENTER = 'commenter'
+VALID_COLLAB_ROLES = [COLLAB_ROLE_OWNER, COLLAB_ROLE_EDITOR, COLLAB_ROLE_VIEWER, COLLAB_ROLE_COMMENTER]
+
+COLLAB_ROLE_LABELS = {
+    COLLAB_ROLE_OWNER: '创建者',
+    COLLAB_ROLE_EDITOR: '编辑者',
+    COLLAB_ROLE_VIEWER: '查看者',
+    COLLAB_ROLE_COMMENTER: '留言者'
+}
+
+class Collaborator(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role = db.Column(db.String(20), default=COLLAB_ROLE_VIEWER, nullable=False)
+    status = db.Column(db.String(20), default='active', nullable=False)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    memory = db.relationship('Memory', backref='collaborators')
+    user = db.relationship('User', backref='collaborations')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'role': self.role,
+            'role_label': COLLAB_ROLE_LABELS.get(self.role, self.role),
+            'status': self.status,
+            'joined_at': self.joined_at.strftime('%Y-%m-%d %H:%M') if self.joined_at else None
+        }
+
+class CollaborationLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    action = db.Column(db.String(100), nullable=False)
+    detail = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='collab_logs')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else '未知用户',
+            'action': self.action,
+            'detail': self.detail,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None
+        }
+
+class Invitation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    invite_code = db.Column(db.String(8), unique=True, nullable=False)
+    invite_link = db.Column(db.String(500), nullable=True)
+    role = db.Column(db.String(20), default=COLLAB_ROLE_VIEWER, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    max_uses = db.Column(db.Integer, default=0)
+    use_count = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    creator = db.relationship('User', backref='invitations')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'invite_code': self.invite_code,
+            'invite_link': self.invite_link,
+            'role': self.role,
+            'role_label': COLLAB_ROLE_LABELS.get(self.role, self.role),
+            'max_uses': self.max_uses,
+            'use_count': self.use_count,
+            'is_active': self.is_active,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+class JoinRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    invitation_id = db.Column(db.Integer, db.ForeignKey('invitation.id'), nullable=True)
+    role = db.Column(db.String(20), default=COLLAB_ROLE_VIEWER, nullable=False)
+    status = db.Column(db.String(20), default='pending', nullable=False)
+    message = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+
+    user = db.relationship('User', backref='join_requests')
+    invitation = db.relationship('Invitation', backref='join_requests')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'invitation_id': self.invitation_id,
+            'role': self.role,
+            'role_label': COLLAB_ROLE_LABELS.get(self.role, self.role),
+            'status': self.status,
+            'message': self.message,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None,
+            'reviewed_at': self.reviewed_at.strftime('%Y-%m-%d %H:%M') if self.reviewed_at else None
+        }
+
+class MemoryComment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='comments')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'content': self.content,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+def log_collab_action(memory_id, action, detail='', user_id=None):
+    try:
+        log = CollaborationLog(
+            memory_id=memory_id,
+            user_id=user_id or (current_user.id if current_user.is_authenticated else None),
+            action=action,
+            detail=detail[:500] if detail else ''
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception as e:
+        app.logger.error(f"Failed to write collaboration log: {str(e)}")
+
+def get_user_role(memory_id, user_id):
+    if not user_id:
+        return None
+    memory = Memory.query.get(memory_id)
+    if not memory:
+        return None
+    if memory.user_id == user_id:
+        return COLLAB_ROLE_OWNER
+    collab = Collaborator.query.filter_by(
+        memory_id=memory_id, user_id=user_id, status='active'
+    ).first()
+    return collab.role if collab else None
+
+def can_edit(memory_id, user_id):
+    role = get_user_role(memory_id, user_id)
+    return role in [COLLAB_ROLE_OWNER, COLLAB_ROLE_EDITOR]
+
+def can_view_collab(memory_id, user_id):
+    role = get_user_role(memory_id, user_id)
+    return role is not None
+
+def can_comment(memory_id, user_id):
+    role = get_user_role(memory_id, user_id)
+    return role in [COLLAB_ROLE_OWNER, COLLAB_ROLE_EDITOR, COLLAB_ROLE_COMMENTER]
+
+def generate_invite_code(length=6):
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(random.choices(chars, k=length))
+        if not Invitation.query.filter_by(invite_code=code).first():
+            return code
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -499,7 +688,7 @@ def get_memory(memory_id):
 @login_required
 def update_memory(memory_id):
     memory = Memory.query.get_or_404(memory_id)
-    if memory.user_id != current_user.id:
+    if not can_edit(memory_id, current_user.id):
         log_operation('unauthorized_edit', f'Attempted to edit memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
 
@@ -569,6 +758,8 @@ def update_memory(memory_id):
         db.session.commit()
         app.logger.info(f"Memory updated: {memory.id} by user {current_user.username}")
         log_operation('update_memory', f'Updated memory: {memory.title}', memory_id=memory.id)
+        if memory.user_id != current_user.id:
+            log_collab_action(memory_id, 'edit_content', f'{current_user.username} 编辑了记忆内容')
         return jsonify({'success': True, 'memory': memory.to_dict(viewer=current_user)})
     except Exception as e:
         app.logger.error(f"Error updating memory: {str(e)}")
@@ -959,6 +1150,396 @@ def scan_memory(memory_id):
 
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'src')
 
+@app.route('/api/collab/<memory_id>/invite', methods=['POST'])
+@login_required
+def create_invitation(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden', 'message': '只有创建者可以生成邀请'}), 403
+
+    data = request.json or {}
+    role = data.get('role', COLLAB_ROLE_VIEWER)
+    if role not in VALID_COLLAB_ROLES or role == COLLAB_ROLE_OWNER:
+        role = COLLAB_ROLE_VIEWER
+
+    invite_code = generate_invite_code()
+    base_url = get_base_url()
+    invite_link = f"{base_url}/join.html?code={invite_code}"
+
+    invitation = Invitation(
+        memory_id=memory_id,
+        invite_code=invite_code,
+        invite_link=invite_link,
+        role=role,
+        created_by=current_user.id,
+        max_uses=data.get('max_uses', 0)
+    )
+    db.session.add(invitation)
+    db.session.commit()
+
+    log_collab_action(memory_id, 'create_invitation', f'创建邀请码 {invite_code}，角色：{COLLAB_ROLE_LABELS.get(role, role)}')
+    return jsonify({'success': True, 'invitation': invitation.to_dict()})
+
+@app.route('/api/collab/<memory_id>/invitations', methods=['GET'])
+@login_required
+def list_invitations(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    invitations = Invitation.query.filter_by(memory_id=memory_id).order_by(Invitation.created_at.desc()).all()
+    return jsonify({'success': True, 'invitations': [inv.to_dict() for inv in invitations]})
+
+@app.route('/api/collab/invitation/<invite_code>', methods=['GET'])
+def get_invitation_info(invite_code):
+    invitation = Invitation.query.filter_by(invite_code=invite_code).first()
+    if not invitation:
+        return jsonify({'success': False, 'message': '邀请码不存在'}), 404
+
+    if not invitation.is_active:
+        return jsonify({'success': False, 'message': '邀请已失效'}), 400
+
+    if invitation.max_uses > 0 and invitation.use_count >= invitation.max_uses:
+        return jsonify({'success': False, 'message': '邀请已达到使用上限'}), 400
+
+    memory = Memory.query.get(invitation.memory_id)
+    if not memory:
+        return jsonify({'success': False, 'message': '关联的记忆不存在'}), 404
+
+    has_pending = False
+    if current_user.is_authenticated:
+        existing = JoinRequest.query.filter_by(
+            memory_id=invitation.memory_id,
+            user_id=current_user.id,
+            status='pending'
+        ).first()
+        has_pending = existing is not None
+
+        already_member = Collaborator.query.filter_by(
+            memory_id=invitation.memory_id,
+            user_id=current_user.id,
+            status='active'
+        ).first()
+        if already_member:
+            return jsonify({
+                'success': True,
+                'already_member': True,
+                'memory': {'id': memory.id, 'title': memory.title},
+                'role': already_member.role,
+                'invite_code': invite_code
+            })
+
+    return jsonify({
+        'success': True,
+        'already_member': False,
+        'has_pending_request': has_pending,
+        'memory': {'id': memory.id, 'title': memory.title},
+        'role': invitation.role,
+        'role_label': COLLAB_ROLE_LABELS.get(invitation.role, invitation.role),
+        'invite_code': invite_code
+    })
+
+@app.route('/api/collab/join', methods=['POST'])
+@login_required
+def join_collaboration():
+    data = request.json or {}
+    invite_code = data.get('invite_code', '').strip()
+    message = data.get('message', '').strip()
+
+    if not invite_code:
+        return jsonify({'success': False, 'message': '请提供邀请码'}), 400
+
+    invitation = Invitation.query.filter_by(invite_code=invite_code).first()
+    if not invitation:
+        return jsonify({'success': False, 'message': '邀请码不存在'}), 404
+
+    if not invitation.is_active:
+        return jsonify({'success': False, 'message': '邀请已失效'}), 400
+
+    if invitation.max_uses > 0 and invitation.use_count >= invitation.max_uses:
+        return jsonify({'success': False, 'message': '邀请已达到使用上限'}), 400
+
+    memory = Memory.query.get(invitation.memory_id)
+    if not memory:
+        return jsonify({'success': False, 'message': '关联的记忆不存在'}), 404
+
+    if memory.user_id == current_user.id:
+        return jsonify({'success': False, 'message': '您是该记忆的创建者'}), 400
+
+    existing_collab = Collaborator.query.filter_by(
+        memory_id=invitation.memory_id,
+        user_id=current_user.id,
+        status='active'
+    ).first()
+    if existing_collab:
+        return jsonify({'success': False, 'message': '您已是该记忆的协作者'}), 400
+
+    existing_request = JoinRequest.query.filter_by(
+        memory_id=invitation.memory_id,
+        user_id=current_user.id,
+        status='pending'
+    ).first()
+    if existing_request:
+        return jsonify({'success': False, 'message': '您已提交申请，请等待创建者审核'}), 400
+
+    join_req = JoinRequest(
+        memory_id=invitation.memory_id,
+        user_id=current_user.id,
+        invitation_id=invitation.id,
+        role=invitation.role,
+        status='pending',
+        message=message[:200] if message else None
+    )
+    db.session.add(join_req)
+    db.session.commit()
+
+    log_collab_action(invitation.memory_id, 'join_request', f'{current_user.username} 申请加入协作，角色：{COLLAB_ROLE_LABELS.get(invitation.role, invitation.role)}')
+    return jsonify({'success': True, 'message': '申请已提交，请等待创建者审核', 'request_id': join_req.id})
+
+@app.route('/api/collab/<memory_id>/requests', methods=['GET'])
+@login_required
+def list_join_requests(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    requests = JoinRequest.query.filter_by(
+        memory_id=memory_id, status='pending'
+    ).order_by(JoinRequest.created_at.desc()).all()
+    return jsonify({'success': True, 'requests': [r.to_dict() for r in requests]})
+
+@app.route('/api/collab/requests/<request_id>/approve', methods=['POST'])
+@login_required
+def approve_join_request(request_id):
+    join_req = JoinRequest.query.get_or_404(request_id)
+    memory = Memory.query.get_or_404(join_req.memory_id)
+
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    if join_req.status != 'pending':
+        return jsonify({'success': False, 'message': '该申请已处理'}), 400
+
+    existing = Collaborator.query.filter_by(
+        memory_id=join_req.memory_id,
+        user_id=join_req.user_id,
+        status='active'
+    ).first()
+    if existing:
+        join_req.status = 'rejected'
+        join_req.reviewed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'success': False, 'message': '该用户已是协作者'}), 400
+
+    collab = Collaborator(
+        memory_id=join_req.memory_id,
+        user_id=join_req.user_id,
+        role=join_req.role,
+        status='active'
+    )
+    db.session.add(collab)
+
+    join_req.status = 'approved'
+    join_req.reviewed_at = datetime.utcnow()
+
+    if join_req.invitation_id:
+        inv = Invitation.query.get(join_req.invitation_id)
+        if inv:
+            inv.use_count += 1
+
+    db.session.commit()
+
+    username = join_req.user.username if join_req.user else '未知用户'
+    log_collab_action(join_req.memory_id, 'approve_join', f'批准 {username} 加入协作，角色：{COLLAB_ROLE_LABELS.get(join_req.role, join_req.role)}')
+    return jsonify({'success': True, 'message': f'已批准 {username} 加入协作'})
+
+@app.route('/api/collab/requests/<request_id>/reject', methods=['POST'])
+@login_required
+def reject_join_request(request_id):
+    join_req = JoinRequest.query.get_or_404(request_id)
+    memory = Memory.query.get_or_404(join_req.memory_id)
+
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    if join_req.status != 'pending':
+        return jsonify({'success': False, 'message': '该申请已处理'}), 400
+
+    join_req.status = 'rejected'
+    join_req.reviewed_at = datetime.utcnow()
+    db.session.commit()
+
+    username = join_req.user.username if join_req.user else '未知用户'
+    log_collab_action(join_req.memory_id, 'reject_join', f'拒绝 {username} 的协作申请')
+    return jsonify({'success': True, 'message': f'已拒绝 {username} 的申请'})
+
+@app.route('/api/collab/<memory_id>/members', methods=['GET'])
+@login_required
+def list_collaborators(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    role = get_user_role(memory_id, current_user.id)
+    if role is None:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    owner_info = {
+        'id': None,
+        'memory_id': memory_id,
+        'user_id': memory.user_id,
+        'username': memory.author.username if memory.author else None,
+        'role': COLLAB_ROLE_OWNER,
+        'role_label': COLLAB_ROLE_LABELS[COLLAB_ROLE_OWNER],
+        'status': 'active',
+        'joined_at': memory.created_at.strftime('%Y-%m-%d %H:%M') if memory.created_at else None
+    }
+
+    collabs = Collaborator.query.filter_by(memory_id=memory_id, status='active').all()
+    members = [owner_info] + [c.to_dict() for c in collabs]
+    return jsonify({'success': True, 'members': members})
+
+@app.route('/api/collab/<memory_id>/members/<collab_id>/role', methods=['PUT'])
+@login_required
+def update_member_role(memory_id, collab_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    collab = Collaborator.query.get_or_404(collab_id)
+    if collab.memory_id != memory_id:
+        return jsonify({'error': 'Invalid collaborator'}), 400
+
+    data = request.json or {}
+    new_role = data.get('role', '')
+    if new_role not in VALID_COLLAB_ROLES or new_role == COLLAB_ROLE_OWNER:
+        return jsonify({'success': False, 'message': '无效的角色'}), 400
+
+    old_role = collab.role
+    collab.role = new_role
+    db.session.commit()
+
+    username = collab.user.username if collab.user else '未知用户'
+    log_collab_action(memory_id, 'role_change', f'{username} 角色从 {COLLAB_ROLE_LABELS.get(old_role, old_role)} 变更为 {COLLAB_ROLE_LABELS.get(new_role, new_role)}')
+    return jsonify({'success': True, 'member': collab.to_dict()})
+
+@app.route('/api/collab/<memory_id>/members/<collab_id>', methods=['DELETE'])
+@login_required
+def remove_member(memory_id, collab_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if memory.user_id != current_user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    collab = Collaborator.query.get_or_404(collab_id)
+    if collab.memory_id != memory_id:
+        return jsonify({'error': 'Invalid collaborator'}), 400
+
+    username = collab.user.username if collab.user else '未知用户'
+    collab.status = 'removed'
+    db.session.commit()
+
+    log_collab_action(memory_id, 'remove_member', f'移除协作者 {username}')
+    return jsonify({'success': True, 'message': f'已移除 {username}'})
+
+@app.route('/api/collab/<memory_id>/leave', methods=['POST'])
+@login_required
+def leave_collaboration(memory_id):
+    collab = Collaborator.query.filter_by(
+        memory_id=memory_id, user_id=current_user.id, status='active'
+    ).first()
+    if not collab:
+        return jsonify({'success': False, 'message': '您不是该记忆的协作者'}), 400
+
+    collab.status = 'left'
+    db.session.commit()
+
+    log_collab_action(memory_id, 'leave_collab', f'{current_user.username} 退出协作')
+    return jsonify({'success': True, 'message': '已退出协作'})
+
+@app.route('/api/collab/<memory_id>/logs', methods=['GET'])
+@login_required
+def get_collab_logs(memory_id):
+    role = get_user_role(memory_id, current_user.id)
+    if role is None:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    per_page = min(per_page, 100)
+
+    pagination = CollaborationLog.query.filter_by(memory_id=memory_id).order_by(
+        CollaborationLog.created_at.desc()
+    ).paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'success': True,
+        'logs': [log.to_dict() for log in pagination.items],
+        'total': pagination.total,
+        'page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next
+    })
+
+@app.route('/api/collab/<memory_id>/comments', methods=['GET'])
+@login_required
+def get_comments(memory_id):
+    role = get_user_role(memory_id, current_user.id)
+    if role is None:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    comments = MemoryComment.query.filter_by(memory_id=memory_id).order_by(
+        MemoryComment.created_at.desc()
+    ).all()
+    return jsonify({'success': True, 'comments': [c.to_dict() for c in comments]})
+
+@app.route('/api/collab/<memory_id>/comments', methods=['POST'])
+@login_required
+def add_comment(memory_id):
+    if not can_comment(memory_id, current_user.id):
+        return jsonify({'error': 'Forbidden', 'message': '您没有留言权限'}), 403
+
+    data = request.json or {}
+    content = data.get('content', '').strip()
+    if not content:
+        return jsonify({'success': False, 'message': '留言内容不能为空'}), 400
+    if len(content) > 500:
+        return jsonify({'success': False, 'message': '留言内容不能超过500字'}), 400
+
+    comment = MemoryComment(
+        memory_id=memory_id,
+        user_id=current_user.id,
+        content=content
+    )
+    db.session.add(comment)
+    db.session.commit()
+
+    log_collab_action(memory_id, 'add_comment', f'{current_user.username} 添加了留言', user_id=current_user.id)
+    return jsonify({'success': True, 'comment': comment.to_dict()})
+
+@app.route('/api/memories/collaborated', methods=['GET'])
+@login_required
+def get_collaborated_memories():
+    collabs = Collaborator.query.filter_by(user_id=current_user.id, status='active').all()
+    memories = []
+    for c in collabs:
+        memory = Memory.query.get(c.memory_id)
+        if memory:
+            d = memory.to_dict(viewer=current_user)
+            d['collab_role'] = c.role
+            d['collab_role_label'] = COLLAB_ROLE_LABELS.get(c.role, c.role)
+            memories.append(d)
+    return jsonify(memories)
+
+@app.route('/api/collab/<memory_id>/my-role', methods=['GET'])
+@login_required
+def get_my_role(memory_id):
+    role = get_user_role(memory_id, current_user.id)
+    return jsonify({
+        'success': True,
+        'role': role,
+        'role_label': COLLAB_ROLE_LABELS.get(role, role) if role else None,
+        'is_owner': role == COLLAB_ROLE_OWNER,
+        'can_edit': can_edit(memory_id, current_user.id),
+        'can_comment': can_comment(memory_id, current_user.id)
+    })
+
 def serve_frontend_file(filepath):
     full_path = os.path.join(_FRONTEND_DIR, filepath)
     if os.path.exists(full_path):
@@ -999,6 +1580,13 @@ def init_db():
 
     from sqlalchemy import inspect, text
     inspector = inspect(db.engine)
+
+    existing_tables = inspector.get_table_names()
+    for table_name in ['collaborator', 'collaboration_log', 'invitation', 'join_request', 'memory_comment']:
+        if table_name not in existing_tables:
+            app.logger.info(f"Collaboration table '{table_name}' will be created by db.create_all()")
+
+    db.create_all()
 
     # Add columns to memory table if missing
     if 'memory' in inspector.get_table_names():

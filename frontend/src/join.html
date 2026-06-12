@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加入协作 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        .slide-up { animation: slideUp 0.5s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8 flex items-center justify-center">
+        <div class="max-w-lg w-full slide-up">
+
+            <div id="code-input-section" class="hidden mb-8">
+                <div class="glass rounded-2xl p-8 shadow-2xl">
+                    <div class="text-center mb-6">
+                        <div class="w-16 h-16 mx-auto bg-cyber-light/20 rounded-full flex items-center justify-center mb-4 border border-cyber-light/30">
+                            <svg class="w-8 h-8 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
+                        </div>
+                        <h2 class="text-2xl font-bold gradient-text mb-2">输入邀请码</h2>
+                        <p class="text-gray-400 text-sm">输入创建者分享的邀请码，加入记忆协作</p>
+                    </div>
+                    <form id="code-form" class="space-y-4">
+                        <input type="text" id="manual-code" maxlength="20" placeholder="请输入邀请码"
+                            class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white text-center text-lg font-mono tracking-widest focus:outline-none focus:border-cyber-light focus:ring-1 focus:ring-cyber-light placeholder-gray-600">
+                        <button type="submit" class="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-bold py-3 px-4 rounded-lg transition transform hover:scale-[1.02]">
+                            查询邀请
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div id="loading-section" class="hidden">
+                <div class="glass rounded-2xl p-12 shadow-2xl text-center">
+                    <div class="w-12 h-12 mx-auto border-4 border-cyber-light/30 border-t-cyber-light rounded-full animate-spin mb-4"></div>
+                    <p class="text-gray-400">正在获取邀请信息...</p>
+                </div>
+            </div>
+
+            <div id="error-section" class="hidden">
+                <div class="glass rounded-2xl p-8 shadow-2xl text-center border-t-4 border-red-500">
+                    <div class="w-16 h-16 mx-auto bg-red-500/20 rounded-full flex items-center justify-center mb-4 border border-red-500/30">
+                        <svg class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path></svg>
+                    </div>
+                    <h2 class="text-xl font-bold mb-2">邀请无效</h2>
+                    <p id="error-message" class="text-gray-400 mb-6"></p>
+                    <a href="/dashboard.html" class="text-cyber-light hover:underline text-sm">返回我的记忆 &rarr;</a>
+                </div>
+            </div>
+
+            <div id="already-member-section" class="hidden">
+                <div class="glass rounded-2xl p-8 shadow-2xl text-center border-t-4 border-green-500">
+                    <div class="w-16 h-16 mx-auto bg-green-500/20 rounded-full flex items-center justify-center mb-4 border border-green-500/30">
+                        <svg class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <h2 class="text-xl font-bold mb-2">您已是协作者</h2>
+                    <p class="text-gray-400 mb-2">您已经是「<span id="member-memory-title" class="text-white font-bold"></span>」的协作者</p>
+                    <a id="member-view-link" href="#" class="inline-block mt-4 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-bold py-2.5 px-6 rounded-lg transition transform hover:scale-[1.02] text-sm">
+                        查看记忆 &rarr;
+                    </a>
+                </div>
+            </div>
+
+            <div id="pending-section" class="hidden">
+                <div class="glass rounded-2xl p-8 shadow-2xl text-center border-t-4 border-yellow-500">
+                    <div class="w-16 h-16 mx-auto bg-yellow-500/20 rounded-full flex items-center justify-center mb-4 border border-yellow-500/30">
+                        <svg class="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <h2 class="text-xl font-bold mb-2">申请审核中</h2>
+                    <p class="text-gray-400">您已提交申请，请等待创建者审核</p>
+                </div>
+            </div>
+
+            <div id="join-form-section" class="hidden">
+                <div class="glass rounded-2xl p-8 shadow-2xl border-t-4 border-cyber-light fade-in">
+                    <div class="text-center mb-8">
+                        <div class="w-16 h-16 mx-auto bg-cyber-light/20 rounded-full flex items-center justify-center mb-4 border border-cyber-light/30">
+                            <svg class="w-8 h-8 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
+                        </div>
+                        <h2 class="text-2xl font-bold gradient-text mb-2">加入协作</h2>
+                        <p class="text-gray-400 text-sm">您被邀请参与以下记忆的协作</p>
+                    </div>
+
+                    <div class="space-y-5">
+                        <div>
+                            <label class="block text-gray-400 text-sm font-bold mb-2">记忆标题</label>
+                            <div id="invite-memory-title" class="w-full bg-gray-800/50 border border-gray-700 rounded-lg py-3 px-4 text-white font-semibold"></div>
+                        </div>
+
+                        <div>
+                            <label class="block text-gray-400 text-sm font-bold mb-2">将获得的角色</label>
+                            <div>
+                                <span id="invite-role-badge" class="inline-flex items-center gap-1 px-4 py-1.5 rounded-full text-sm font-bold border"></span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-gray-400 text-sm font-bold mb-2">
+                                申请留言 <span class="text-gray-600 font-normal">（选填，最多200字）</span>
+                            </label>
+                            <textarea id="join-message" maxlength="200" rows="3" placeholder="向创建者介绍一下自己吧..."
+                                class="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white focus:outline-none focus:border-cyber-light focus:ring-1 focus:ring-cyber-light placeholder-gray-600 resize-none"></textarea>
+                            <div class="text-right text-xs text-gray-600 mt-1"><span id="char-count">0</span>/200</div>
+                        </div>
+
+                        <button id="join-btn" type="button" class="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-bold py-3 px-4 rounded-lg transition transform hover:scale-[1.02]">
+                            申请加入
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="success-section" class="hidden">
+                <div class="glass rounded-2xl p-8 shadow-2xl text-center border-t-4 border-green-500 fade-in">
+                    <div class="w-16 h-16 mx-auto bg-green-500/20 rounded-full flex items-center justify-center mb-4 border border-green-500/30">
+                        <svg class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <h2 class="text-xl font-bold mb-2">申请已提交</h2>
+                    <p class="text-gray-400">请等待创建者审核，审核通过后即可参与协作</p>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <div id="toast" class="fixed top-20 right-4 transform translate-x-full transition-transform duration-300 z-50">
+        <div id="toastContent" class="glass px-6 py-3 rounded-lg shadow-lg border-l-4 flex items-center gap-3"></div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const inviteCode = urlParams.get('code');
+        let currentInviteCode = inviteCode || '';
+
+        const sections = {
+            codeInput: document.getElementById('code-input-section'),
+            loading: document.getElementById('loading-section'),
+            error: document.getElementById('error-section'),
+            alreadyMember: document.getElementById('already-member-section'),
+            pending: document.getElementById('pending-section'),
+            joinForm: document.getElementById('join-form-section'),
+            success: document.getElementById('success-section')
+        };
+
+        function showSection(name) {
+            Object.values(sections).forEach(s => s.classList.add('hidden'));
+            sections[name].classList.remove('hidden');
+        }
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const content = document.getElementById('toastContent');
+            content.className = 'glass px-6 py-3 rounded-lg shadow-lg border-l-4 flex items-center gap-3';
+            if (type === 'success') {
+                content.classList.add('border-green-500');
+                content.innerHTML = `
+                    <svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    <span>${message}</span>
+                `;
+            } else {
+                content.classList.add('border-red-500');
+                content.innerHTML = `
+                    <svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    <span>${message}</span>
+                `;
+            }
+            toast.classList.remove('translate-x-full');
+            setTimeout(() => {
+                toast.classList.add('translate-x-full');
+            }, 3000);
+        }
+
+        function getRoleBadgeHtml(role) {
+            const roleConfig = {
+                'viewer': { label: '查看者', classes: 'bg-gray-500/20 text-gray-400 border-gray-500/30' },
+                'editor': { label: '编辑者', classes: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+                'commenter': { label: '留言者', classes: 'bg-pink-500/20 text-pink-400 border-pink-500/30' }
+            };
+            const cfg = roleConfig[role] || roleConfig['viewer'];
+            return { label: cfg.label, classes: cfg.classes };
+        }
+
+        async function checkAuthAndLoad() {
+            try {
+                const authRes = await fetch('/api/auth/status');
+                const authData = await authRes.json();
+
+                if (!authData.authenticated) {
+                    const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+                    window.location.href = `/login.html?redirect=${currentUrl}`;
+                    return;
+                }
+
+                if (currentInviteCode) {
+                    loadInvitation(currentInviteCode);
+                } else {
+                    showSection('codeInput');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('网络错误，请重试', 'error');
+            }
+        }
+
+        async function loadInvitation(code) {
+            currentInviteCode = code;
+            showSection('loading');
+
+            try {
+                const res = await fetch(`/api/collab/invitation/${encodeURIComponent(code)}`);
+                const data = await res.json();
+
+                if (!res.ok) {
+                    document.getElementById('error-message').textContent = data.message || '获取邀请信息失败';
+                    showSection('error');
+                    return;
+                }
+
+                if (data.already_member) {
+                    document.getElementById('member-memory-title').textContent = data.memory.title;
+                    document.getElementById('member-view-link').href = `/view_memory.html?id=${data.memory.id}`;
+                    showSection('alreadyMember');
+                    return;
+                }
+
+                if (data.has_pending_request) {
+                    showSection('pending');
+                    return;
+                }
+
+                const roleInfo = getRoleBadgeHtml(data.role);
+                document.getElementById('invite-memory-title').textContent = data.memory.title;
+                const badge = document.getElementById('invite-role-badge');
+                badge.textContent = data.role_label || roleInfo.label;
+                badge.className = `inline-flex items-center gap-1 px-4 py-1.5 rounded-full text-sm font-bold border ${roleInfo.classes}`;
+                showSection('joinForm');
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('error-message').textContent = '网络错误，请检查连接后重试';
+                showSection('error');
+            }
+        }
+
+        document.getElementById('code-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const code = document.getElementById('manual-code').value.trim();
+            if (!code) {
+                showToast('请输入邀请码', 'error');
+                return;
+            }
+            const newParams = new URLSearchParams();
+            newParams.set('code', code);
+            history.replaceState(null, '', '?' + newParams.toString());
+            loadInvitation(code);
+        });
+
+        document.getElementById('join-message').addEventListener('input', function () {
+            document.getElementById('char-count').textContent = this.value.length;
+        });
+
+        document.getElementById('join-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('join-btn');
+            const message = document.getElementById('join-message').value.trim();
+
+            btn.disabled = true;
+            btn.textContent = '提交中...';
+
+            try {
+                const res = await fetch('/api/collab/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ invite_code: currentInviteCode, message })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    showSection('success');
+                } else {
+                    showToast(data.message || '申请失败', 'error');
+                    btn.disabled = false;
+                    btn.textContent = '申请加入';
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('网络错误，请重试', 'error');
+                btn.disabled = false;
+                btn.textContent = '申请加入';
+            }
+        });
+
+        checkAuthAndLoad();
+    </script>
+</body>
+</html>

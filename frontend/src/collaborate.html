@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>协作管理 - Memory QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            dark: '#0f172a',
+                            light: '#38bdf8',
+                            neon: '#f472b6',
+                            card: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #f472b6); -webkit-background-clip: text; color: transparent; }
+        .role-owner { background: rgba(234, 179, 8, 0.2); color: #fbbf24; border: 1px solid rgba(234, 179, 8, 0.3); }
+        .role-editor { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+        .role-viewer { background: rgba(156, 163, 175, 0.2); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
+        .role-commenter { background: rgba(244, 114, 182, 0.2); color: #f472b6; border: 1px solid rgba(244, 114, 182, 0.3); }
+        .tab-active { border-bottom: 2px solid #38bdf8; color: #38bdf8; }
+        .tab-inactive { border-bottom: 2px solid transparent; color: #9ca3af; }
+        .tab-inactive:hover { color: #e2e8f0; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <nav class="glass sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="text-2xl font-bold tracking-wider gradient-text">MEMORY QR</a>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4" id="nav-links"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div class="max-w-4xl mx-auto">
+            <div class="mb-6">
+                <a id="back-link" href="#" class="text-gray-400 hover:text-white flex items-center gap-2 text-sm">
+                    &larr; 返回记忆详情
+                </a>
+            </div>
+
+            <div class="mb-6">
+                <h1 class="text-3xl font-bold gradient-text" id="memory-title">加载中...</h1>
+            </div>
+
+            <div class="glass rounded-2xl overflow-hidden">
+                <div class="flex border-b border-white/10 overflow-x-auto" id="tab-bar">
+                    <button class="tab-active px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="members" onclick="switchTab('members')">成员管理</button>
+                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="invite" onclick="switchTab('invite')">邀请协作</button>
+                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="requests" id="tab-requests" onclick="switchTab('requests')">申请审核</button>
+                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="logs" onclick="switchTab('logs')">协作记录</button>
+                    <button class="tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors" data-tab="comments" onclick="switchTab('comments')">留言板</button>
+                </div>
+
+                <div id="tab-content" class="p-6">
+                    <div class="text-center py-12 text-gray-500">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast" class="fixed top-20 right-4 transform translate-x-full transition-transform duration-300 z-50">
+        <div id="toastContent" class="glass px-6 py-3 rounded-lg shadow-lg border-l-4 flex items-center gap-3"></div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const memoryId = urlParams.get('id');
+        let myRole = null;
+        let currentTab = 'members';
+        let logsPage = 1;
+        let logsHasMore = true;
+
+        document.getElementById('back-link').href = `/view_memory.html?id=${memoryId}`;
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const content = document.getElementById('toastContent');
+            content.className = 'glass px-6 py-3 rounded-lg shadow-lg border-l-4 flex items-center gap-3';
+            if (type === 'success') {
+                content.classList.add('border-green-500');
+                content.innerHTML = `<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg><span>${message}</span>`;
+            } else {
+                content.classList.add('border-red-500');
+                content.innerHTML = `<svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg><span>${message}</span>`;
+            }
+            toast.classList.remove('translate-x-full');
+            setTimeout(() => { toast.classList.add('translate-x-full'); }, 3000);
+        }
+
+        function getRoleBadgeClass(role) {
+            const map = { owner: 'role-owner', editor: 'role-editor', viewer: 'role-viewer', commenter: 'role-commenter' };
+            return map[role] || 'role-viewer';
+        }
+
+        function getRoleLabel(role) {
+            const map = { owner: '拥有者', editor: '编辑者', viewer: '查看者', commenter: '评论者' };
+            return map[role] || role;
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('#tab-bar button').forEach(btn => {
+                btn.className = btn.dataset.tab === tab
+                    ? 'tab-active px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors'
+                    : 'tab-inactive px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-colors';
+            });
+            loadTabContent(tab);
+        }
+
+        async function loadTabContent(tab) {
+            const content = document.getElementById('tab-content');
+            content.innerHTML = '<div class="text-center py-12 text-gray-500">加载中...</div>';
+
+            switch (tab) {
+                case 'members': await loadMembers(); break;
+                case 'invite': await loadInvite(); break;
+                case 'requests': await loadRequests(); break;
+                case 'logs': await loadLogs(); break;
+                case 'comments': await loadComments(); break;
+            }
+        }
+
+        async function init() {
+            if (!memoryId) {
+                document.getElementById('tab-content').innerHTML = '<div class="p-12 text-center text-red-500">无效的记忆ID</div>';
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}`);
+                if (res.ok) {
+                    const m = await res.json();
+                    document.getElementById('memory-title').textContent = m.title || '协作管理';
+                }
+            } catch (e) { /* ignore */ }
+
+            try {
+                const roleRes = await fetch(`/api/collab/${memoryId}/my-role`);
+                if (roleRes.ok) {
+                    const data = await roleRes.json();
+                    myRole = data.role;
+                } else if (roleRes.status === 401) {
+                    const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+                    window.location.href = `/login.html?redirect=${currentUrl}`;
+                    return;
+                }
+            } catch (e) { /* ignore */ }
+
+            if (myRole !== 'owner') {
+                document.getElementById('tab-requests').style.display = 'none';
+            }
+
+            loadTabContent('members');
+        }
+
+        async function loadMembers() {
+            const content = document.getElementById('tab-content');
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/members`);
+                if (!res.ok) { content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败</div>'; return; }
+                const data = await res.json();
+                const members = data.members || data;
+
+                let html = '<div class="space-y-3">';
+                members.forEach(m => {
+                    const isMe = m.user_id && m.username;
+                    const isOwner = m.role === 'owner';
+                    const canManage = myRole === 'owner' && !isOwner;
+
+                    html += `<div class="glass rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-full bg-gradient-to-br from-cyber-light to-cyber-neon flex items-center justify-center font-bold text-sm text-white">
+                                ${(m.username || '?')[0].toUpperCase()}
+                            </div>
+                            <div>
+                                <div class="font-semibold flex items-center gap-2">
+                                    ${m.username || '未知用户'}
+                                </div>
+                                <div class="text-xs text-gray-500 mt-0.5">${m.joined_at || ''}</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${getRoleBadgeClass(m.role)}">${getRoleLabel(m.role)}</span>
+                            ${canManage && m.id ? `
+                                <select onchange="changeRole(${m.id}, this.value)" class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-cyber-light">
+                                    <option value="editor" ${m.role === 'editor' ? 'selected' : ''}>编辑者</option>
+                                    <option value="viewer" ${m.role === 'viewer' ? 'selected' : ''}>查看者</option>
+                                    <option value="commenter" ${m.role === 'commenter' ? 'selected' : ''}>留言者</option>
+                                </select>
+                                <button onclick="removeMember(${m.id}, '${m.username}')" class="text-red-400 hover:text-red-300 text-xs hover:bg-red-500/10 px-2 py-1 rounded transition">移除</button>
+                            ` : ''}
+                        </div>
+                    </div>`;
+                });
+
+                if (myRole && myRole !== 'owner') {
+                    html += `<div class="mt-6 pt-4 border-t border-white/10">
+                        <button onclick="leaveCollab()" class="bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 px-6 py-2 rounded-lg text-sm font-semibold transition">退出协作</button>
+                    </div>`;
+                }
+
+                html += '</div>';
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败，请检查网络</div>';
+            }
+        }
+
+        async function changeRole(collabId, newRole) {
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/members/${collabId}/role`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: newRole })
+                });
+                if (res.ok) {
+                    showToast('角色已更新');
+                    loadMembers();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '更新失败', 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function removeMember(collabId, username) {
+            if (!confirm(`确定要移除成员「${username}」吗？`)) return;
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/members/${collabId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('已移除成员');
+                    loadMembers();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '移除失败', 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function leaveCollab() {
+            if (!confirm('确定要退出此协作吗？')) return;
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/leave`, { method: 'POST' });
+                if (res.ok) {
+                    showToast('已退出协作');
+                    setTimeout(() => { window.location.href = `/view_memory.html?id=${memoryId}`; }, 1000);
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '退出失败', 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function loadInvite() {
+            const content = document.getElementById('tab-content');
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/invitations`);
+                if (!res.ok) { content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败</div>'; return; }
+                const data = await res.json();
+                const invitations = data.invitations || data;
+
+                let html = '';
+
+                if (myRole === 'owner' || myRole === 'editor') {
+                    html += `<div class="glass rounded-xl p-6 mb-6">
+                        <h3 class="text-lg font-bold mb-4">创建邀请</h3>
+                        <div class="flex flex-wrap items-end gap-4">
+                            <div>
+                                <label class="block text-gray-400 text-xs font-semibold mb-1">角色</label>
+                                <select id="invite-role" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyber-light">
+                                    <option value="editor">编辑者</option>
+                                    <option value="viewer">查看者</option>
+                                    <option value="commenter">评论者</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-gray-400 text-xs font-semibold mb-1">最大使用次数</label>
+                                <input type="number" id="invite-max-uses" value="1" min="1" max="100" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:outline-none focus:border-cyber-light">
+                            </div>
+                            <button onclick="createInvite()" id="create-invite-btn" class="bg-cyber-light text-cyber-dark font-bold px-6 py-2 rounded-lg text-sm hover:bg-blue-400 transition">生成邀请</button>
+                        </div>
+                    </div>`;
+                }
+
+                html += '<div class="space-y-3">';
+                if (invitations.length === 0) {
+                    html += '<div class="text-center py-8 text-gray-500">暂无邀请</div>';
+                } else {
+                    invitations.forEach(inv => {
+                        const inviteLink = inv.invite_link || `${window.location.origin}/join.html?code=${inv.invite_code}`;
+                        html += `<div class="glass rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="font-mono text-sm text-cyber-light">${inv.invite_code}</span>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${getRoleBadgeClass(inv.role)}">${getRoleLabel(inv.role)}</span>
+                                </div>
+                                <div class="text-xs text-gray-500">已使用 ${inv.use_count || 0} / ${inv.max_uses || '∞'}</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="copyText('${inv.invite_code}')" class="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg transition">复制代码</button>
+                                <button onclick="copyText('${inviteLink}')" class="text-xs text-cyber-light hover:text-white bg-cyber-light/10 hover:bg-cyber-light/20 px-3 py-1.5 rounded-lg transition">复制链接</button>
+                            </div>
+                        </div>`;
+                    });
+                }
+                html += '</div>';
+
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败，请检查网络</div>';
+            }
+        }
+
+        async function createInvite() {
+            const role = document.getElementById('invite-role').value;
+            const maxUses = parseInt(document.getElementById('invite-max-uses').value) || 1;
+            const btn = document.getElementById('create-invite-btn');
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/invite`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role, max_uses: maxUses })
+                });
+                if (res.ok) {
+                    showToast('邀请已创建');
+                    loadInvite();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '创建失败', 'error');
+                    btn.disabled = false;
+                    btn.textContent = '生成邀请';
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+                btn.disabled = false;
+                btn.textContent = '生成邀请';
+            }
+        }
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('已复制到剪贴板');
+            }).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                showToast('已复制到剪贴板');
+            });
+        }
+
+        async function loadRequests() {
+            const content = document.getElementById('tab-content');
+            if (myRole !== 'owner') {
+                content.innerHTML = '<div class="p-8 text-center text-gray-500">仅拥有者可查看</div>';
+                return;
+            }
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/requests`);
+                if (!res.ok) { content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败</div>'; return; }
+                const data = await res.json();
+                const requests = data.requests || data;
+
+                let html = '<div class="space-y-3">';
+                if (requests.length === 0) {
+                    html += '<div class="text-center py-8 text-gray-500">暂无待审核申请</div>';
+                } else {
+                    requests.forEach(r => {
+                        html += `<div class="glass rounded-xl p-4">
+                            <div class="flex items-center justify-between gap-4 flex-wrap">
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <span class="font-semibold">${r.username || '未知用户'}</span>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${getRoleBadgeClass(r.role || 'viewer')}">${getRoleLabel(r.role || 'viewer')}</span>
+                                    </div>
+                                    ${r.message ? `<div class="text-sm text-gray-400 mb-1">${r.message}</div>` : ''}
+                                    <div class="text-xs text-gray-500">${r.created_at || ''}</div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="handleRequest(${r.id}, 'approve')" class="bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 px-4 py-1.5 rounded-lg text-xs font-semibold transition">通过</button>
+                                    <button onclick="handleRequest(${r.id}, 'reject')" class="bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 px-4 py-1.5 rounded-lg text-xs font-semibold transition">拒绝</button>
+                                </div>
+                            </div>
+                        </div>`;
+                    });
+                }
+                html += '</div>';
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败，请检查网络</div>';
+            }
+        }
+
+        async function handleRequest(requestId, action) {
+            try {
+                const res = await fetch(`/api/collab/requests/${requestId}/${action}`, { method: 'POST' });
+                if (res.ok) {
+                    showToast(action === 'approve' ? '已通过申请' : '已拒绝申请');
+                    loadRequests();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '操作失败', 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function loadLogs(append) {
+            const content = document.getElementById('tab-content');
+            if (!append) {
+                logsPage = 1;
+                logsHasMore = true;
+            }
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/logs?page=${logsPage}&per_page=20`);
+                if (!res.ok) { content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败</div>'; return; }
+                const data = await res.json();
+                const logs = data.logs || data.items || data;
+                const totalPages = data.total_pages || 1;
+                logsHasMore = logsPage < totalPages;
+
+                let html = '';
+                if (!append) html += '<div class="space-y-2" id="logs-list">';
+
+                if (!append && logs.length === 0) {
+                    content.innerHTML = '<div class="text-center py-8 text-gray-500">暂无协作记录</div>';
+                    return;
+                }
+
+                logs.forEach(log => {
+                    html += `<div class="flex items-start gap-3 py-3 border-b border-white/5 last:border-0">
+                        <div class="w-8 h-8 rounded-full bg-gradient-to-br from-cyber-light to-cyber-neon flex items-center justify-center font-bold text-xs text-white shrink-0 mt-0.5">
+                            ${(log.username || '?')[0].toUpperCase()}
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-sm"><span class="font-semibold text-cyber-light">${log.username || '未知'}</span> <span class="text-gray-400">${log.action || ''}</span></div>
+                            ${log.detail ? `<div class="text-xs text-gray-500 mt-0.5">${log.detail}</div>` : ''}
+                            <div class="text-xs text-gray-600 mt-0.5">${log.timestamp || log.created_at || ''}</div>
+                        </div>
+                    </div>`;
+                });
+
+                if (!append) html += '</div>';
+
+                if (logsHasMore) {
+                    html += `<div class="mt-4 text-center"><button onclick="loadMoreLogs()" class="text-sm text-cyber-light hover:text-white bg-cyber-light/10 hover:bg-cyber-light/20 px-6 py-2 rounded-lg transition">加载更多</button></div>`;
+                }
+
+                if (append) {
+                    const list = document.getElementById('logs-list');
+                    if (list) {
+                        const moreBtn = content.querySelector('button[onclick="loadMoreLogs()"]');
+                        if (moreBtn) moreBtn.parentElement.remove();
+                        list.insertAdjacentHTML('beforeend', html);
+                        if (logsHasMore) {
+                            list.insertAdjacentHTML('afterend', `<div class="mt-4 text-center"><button onclick="loadMoreLogs()" class="text-sm text-cyber-light hover:text-white bg-cyber-light/10 hover:bg-cyber-light/20 px-6 py-2 rounded-lg transition">加载更多</button></div>`);
+                        }
+                    }
+                } else {
+                    content.innerHTML = html;
+                }
+            } catch (e) {
+                if (!append) content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败，请检查网络</div>';
+            }
+        }
+
+        async function loadMoreLogs() {
+            logsPage++;
+            await loadLogs(true);
+        }
+
+        async function loadComments() {
+            const content = document.getElementById('tab-content');
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/comments`);
+                if (!res.ok) { content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败</div>'; return; }
+                const data = await res.json();
+                const comments = data.comments || data;
+
+                let html = '';
+
+                const canComment = myRole === 'owner' || myRole === 'editor' || myRole === 'commenter';
+                if (canComment) {
+                    html += `<div class="glass rounded-xl p-4 mb-6">
+                        <textarea id="comment-input" rows="3" maxlength="500" placeholder="写下你的留言..." class="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 px-3 text-white text-sm focus:outline-none focus:border-cyber-light resize-none"></textarea>
+                        <div class="flex justify-end mt-2">
+                            <button onclick="postComment()" id="post-comment-btn" class="bg-cyber-light text-cyber-dark font-bold px-5 py-1.5 rounded-lg text-sm hover:bg-blue-400 transition">发送</button>
+                        </div>
+                    </div>`;
+                }
+
+                html += '<div class="space-y-3">';
+                if (comments.length === 0) {
+                    html += '<div class="text-center py-8 text-gray-500">暂无留言</div>';
+                } else {
+                    comments.forEach(c => {
+                        html += `<div class="glass rounded-xl p-4">
+                            <div class="flex items-center gap-3 mb-2">
+                                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-cyber-light to-cyber-neon flex items-center justify-center font-bold text-xs text-white">
+                                    ${(c.username || '?')[0].toUpperCase()}
+                                </div>
+                                <div>
+                                    <span class="font-semibold text-sm">${c.username || '未知用户'}</span>
+                                    <span class="text-xs text-gray-500 ml-2">${c.created_at || ''}</span>
+                                </div>
+                            </div>
+                            <div class="text-sm text-gray-300 pl-11 whitespace-pre-wrap">${c.content || ''}</div>
+                        </div>`;
+                    });
+                }
+                html += '</div>';
+
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = '<div class="p-8 text-center text-red-500">加载失败，请检查网络</div>';
+            }
+        }
+
+        async function postComment() {
+            const input = document.getElementById('comment-input');
+            const content = input.value.trim();
+            if (!content) { showToast('请输入留言内容', 'error'); return; }
+
+            const btn = document.getElementById('post-comment-btn');
+            btn.disabled = true;
+            btn.textContent = '发送中...';
+
+            try {
+                const res = await fetch(`/api/collab/${memoryId}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                if (res.ok) {
+                    showToast('留言已发送');
+                    loadComments();
+                } else {
+                    const data = await res.json();
+                    showToast(data.message || '发送失败', 'error');
+                    btn.disabled = false;
+                    btn.textContent = '发送';
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+                btn.disabled = false;
+                btn.textContent = '发送';
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
