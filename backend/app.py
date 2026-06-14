@@ -277,49 +277,66 @@ class Memory(db.Model):
         if user_id is None:
             return False, '需要登录后才能参与联合解锁', None
 
-        session = UnlockSession.query.filter(
+        unlocked_sessions = UnlockSession.query.filter(
             UnlockSession.memory_id == self.id,
-            UnlockSession.status.in_(['active', 'unlocked'])
-        ).order_by(
-            db.case(
-                (UnlockSession.status == 'active', 1),
-                (UnlockSession.status == 'unlocked', 2)
-            ),
-            UnlockSession.created_at.desc()
-        ).first()
+            UnlockSession.status == 'unlocked'
+        ).all()
 
-        if session and session.is_unlocked():
+        for us in unlocked_sessions:
             participant = UnlockParticipant.query.filter_by(
-                session_id=session.id, user_id=user_id
+                session_id=us.id, user_id=user_id
             ).first()
             if participant:
-                return True, None, session
-            if session.status == 'unlocked':
-                return False, '本轮联合解锁已完成，但您未参与，请发起新一轮解锁', session
+                return True, None, us
 
-        current_count = 0
-        if session:
+        active_sessions = UnlockSession.query.filter_by(
+            memory_id=self.id, status='active'
+        ).order_by(UnlockSession.created_at.desc()).all()
+
+        user_participating_session = None
+        for s in active_sessions:
+            participant = UnlockParticipant.query.filter_by(
+                session_id=s.id, user_id=user_id
+            ).first()
+            if participant:
+                user_participating_session = s
+                break
+
+        if user_participating_session:
+            current_count = user_participating_session.current_count
+            return False, f'您已参与一轮解锁，还需 {self.group_unlock_count - current_count} 人参与', user_participating_session
+
+        if active_sessions:
+            session = active_sessions[0]
             current_count = session.current_count
-        if not session or (session.status == 'unlocked' and not self.has_active_session()):
-            return False, '尚未有人发起联合解锁，请先发起解锁', session
-        if session.current_count >= self.group_unlock_count:
-            participant = UnlockParticipant.query.filter_by(
-                session_id=session.id, user_id=user_id
-            ).first()
-            if participant:
-                return True, None, session
-            return False, '本轮联合解锁已完成，但您未参与，请发起新一轮解锁', session
-        participant = UnlockParticipant.query.filter_by(
-            session_id=session.id, user_id=user_id
-        ).first()
-        if participant:
-            return False, f'您已参与本轮解锁，还需 {self.group_unlock_count - current_count} 人参与', session
-        return False, f'还需 {self.group_unlock_count - current_count} 人参与解锁', session
+            return False, f'还需 {self.group_unlock_count - current_count} 人参与解锁，或发起新一轮', session
+
+        return False, '尚未有人发起联合解锁，请先发起解锁', None
 
     def has_active_session(self):
         return UnlockSession.query.filter_by(
             memory_id=self.id, status='active'
         ).first() is not None
+
+    def get_active_sessions(self, user_id=None):
+        sessions = UnlockSession.query.filter_by(
+            memory_id=self.id, status='active'
+        ).order_by(UnlockSession.created_at.desc()).all()
+        
+        result = []
+        for s in sessions:
+            is_participant = False
+            if user_id:
+                participant = UnlockParticipant.query.filter_by(
+                    session_id=s.id, user_id=user_id
+                ).first()
+                is_participant = participant is not None
+            
+            session_dict = s.to_dict()
+            session_dict['is_participant'] = is_participant
+            result.append(session_dict)
+        
+        return result
 
     def can_view(self, user=None, user_lat=None, user_lon=None, skip_geo=False, skip_group=False):
         if self.visibility == VISIBILITY_PUBLIC:
@@ -395,6 +412,7 @@ class Memory(db.Model):
             'group_unlock_count': self.group_unlock_count,
             'group_current_count': group_session.current_count if group_session else 0,
             'group_session_id': group_session.id if group_session else None,
+            'group_active_sessions': self.get_active_sessions(viewer_id),
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
             'author': self.author.username,
@@ -1550,20 +1568,17 @@ def start_group_unlock(memory_id):
     if memory.user_id == current_user.id:
         return jsonify({'success': False, 'message': '创建者无需参与联合解锁'}), 400
     
-    existing_session = UnlockSession.query.filter_by(
-        memory_id=memory_id, status='active'
-    ).order_by(UnlockSession.created_at.desc()).first()
+    user_active_sessions = UnlockSession.query.filter_by(
+        memory_id=memory_id, 
+        initiator_id=current_user.id,
+        status='active'
+    ).first()
     
-    if existing_session and not existing_session.is_unlocked():
-        existing_participant = UnlockParticipant.query.filter_by(
-            session_id=existing_session.id, user_id=current_user.id
-        ).first()
-        if existing_participant:
-            return jsonify({
-                'success': True,
-                'session': existing_session.to_dict(),
-                'message': '您已在当前解锁会话中'
-            })
+    if user_active_sessions:
+        return jsonify({
+            'success': False,
+            'message': '您已发起过一轮正在进行的解锁，请先完成或等待该轮结束'
+        }), 400
     
     unlock_code = generate_unlock_code()
     session = UnlockSession(
@@ -1593,14 +1608,14 @@ def start_group_unlock(memory_id):
         log_collab_action(
             memory_id,
             'start_group_unlock',
-            f'{current_user.username} 发起了多人联合解锁，需要 {memory.group_unlock_count} 人参与'
+            f'{current_user.username} 发起了新一轮多人联合解锁，需要 {memory.group_unlock_count} 人参与'
         )
         log_operation('group_unlock_start', f'Started group unlock session {unlock_code}', memory_id=memory_id)
         
         return jsonify({
             'success': True,
             'session': session.to_dict(),
-            'message': f'已发起联合解锁，还需 {memory.group_unlock_count - 1} 人参与'
+            'message': f'已发起新一轮联合解锁，还需 {memory.group_unlock_count - 1} 人参与'
         })
     except Exception as e:
         db.session.rollback()
@@ -1618,12 +1633,35 @@ def join_group_unlock(memory_id):
     if memory.user_id == current_user.id:
         return jsonify({'success': False, 'message': '创建者无需参与联合解锁'}), 400
     
-    session = UnlockSession.query.filter_by(
-        memory_id=memory_id, status='active'
-    ).order_by(UnlockSession.created_at.desc()).first()
+    data = request.json or {}
+    session_id = data.get('session_id', None)
+    
+    if session_id:
+        session = UnlockSession.query.filter_by(
+            id=session_id, memory_id=memory_id, status='active'
+        ).first()
+    else:
+        active_sessions = UnlockSession.query.filter_by(
+            memory_id=memory_id, status='active'
+        ).order_by(UnlockSession.created_at.desc()).all()
+        
+        session = None
+        for s in active_sessions:
+            participant = UnlockParticipant.query.filter_by(
+                session_id=s.id, user_id=current_user.id
+            ).first()
+            if not participant and not s.is_unlocked():
+                session = s
+                break
+        
+        if session is None and active_sessions:
+            return jsonify({
+                'success': False,
+                'message': '您已参与所有进行中的解锁会话，您可以发起新一轮解锁'
+            }), 400
     
     if not session:
-        return jsonify({'success': False, 'message': '当前没有进行中的解锁会话，请先发起解锁'}), 400
+        return jsonify({'success': False, 'message': '当前没有可加入的解锁会话，请先发起解锁'}), 400
     
     if session.is_unlocked():
         participant = UnlockParticipant.query.filter_by(
@@ -1651,7 +1689,6 @@ def join_group_unlock(memory_id):
             'message': f'您已参与本轮解锁，还需 {session.required_count - session.current_count} 人'
         })
     
-    data = request.json or {}
     user_lat = data.get('lat', None)
     user_lon = data.get('lon', None)
     
@@ -1678,7 +1715,7 @@ def join_group_unlock(memory_id):
         log_collab_action(
             memory_id,
             'join_group_unlock',
-            f'{current_user.username} 参与了联合解锁，当前 {session.current_count}/{session.required_count} 人'
+            f'{current_user.username} 参与了联合解锁会话 {session.unlock_code}，当前 {session.current_count}/{session.required_count} 人'
         )
         log_operation('group_unlock_join', f'Joined unlock session {session.unlock_code}', memory_id=memory_id)
         

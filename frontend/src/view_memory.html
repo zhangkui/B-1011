@@ -391,9 +391,55 @@
             document.getElementById('action-buttons').classList.add('hidden');
             document.getElementById('qr-section').classList.add('hidden');
 
-            const isInitiator = false;
-            const hasSession = m.group_session_id != null;
-            const needMore = m.group_unlock_count - m.group_current_count;
+            const activeSessions = m.group_active_sessions || [];
+            const userParticipatingSession = activeSessions.find(s => s.is_participant);
+            const hasJoinableSessions = activeSessions.some(s => !s.is_participant);
+
+            let sessionsHtml = '';
+            if (activeSessions.length > 0) {
+                sessionsHtml = `
+                    <div class="mb-8 max-w-lg mx-auto">
+                        <h3 class="text-lg font-bold mb-4 text-gray-300">进行中的解锁团</h3>
+                        <div class="space-y-3">
+                            ${activeSessions.map((s, index) => `
+                                <div class="p-4 bg-gray-800/50 rounded-lg border ${s.is_participant ? 'border-cyber-neon/50 bg-cyber-neon/5' : 'border-gray-700'} text-left">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-sm font-medium ${s.is_participant ? 'text-cyber-neon' : 'text-gray-300'}">
+                                                ${s.is_participant ? '🎯 您参与的团' : `👥 解锁团 #${index + 1}`}
+                                            </span>
+                                            <span class="text-xs text-gray-500">
+                                                发起人: ${s.initiator_username || '未知'}
+                                            </span>
+                                        </div>
+                                        ${s.is_participant ? `
+                                            <button onclick="showShareLink('${s.unlock_link}')" class="text-xs text-cyber-light hover:text-blue-400 transition">
+                                                分享链接
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                    <div class="flex items-center justify-between mb-2 text-sm">
+                                        <span class="text-gray-400">进度</span>
+                                        <span class="text-cyber-neon font-bold">${s.current_count} / ${s.required_count} 人</span>
+                                    </div>
+                                    <div class="h-2 bg-gray-700 rounded-full overflow-hidden mb-3">
+                                        <div class="h-full bg-gradient-to-r from-cyber-light to-cyber-neon transition-all duration-500" style="width: ${(s.current_count / s.required_count) * 100}%"></div>
+                                    </div>
+                                    ${!s.is_participant ? `
+                                        <button onclick="joinSpecificSession(${s.id})" class="w-full bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30 py-2 rounded-lg text-sm font-medium hover:bg-cyber-neon/30 transition">
+                                            加入此团
+                                        </button>
+                                    ` : `
+                                        <div class="text-center text-xs text-cyber-neon">
+                                            还需 ${s.required_count - s.current_count} 人即可解锁
+                                        </div>
+                                    `}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
 
             container.innerHTML = `
                 <div class="p-8 md:p-16 text-center">
@@ -409,6 +455,9 @@
                         <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
                             👥 多人联合解锁
                         </span>
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-gray-700/50 text-gray-300 border border-gray-600">
+                            需要 ${m.group_unlock_count} 人
+                        </span>
                         ${m.unlock_time ? `
                         <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
                             🔒 时光胶囊已锁定
@@ -417,7 +466,7 @@
                     </div>
 
                     <p class="text-gray-400 mb-6 max-w-md mx-auto">
-                        此记忆设置了多人联合解锁。需要 <span class="text-cyber-neon font-medium">${m.group_unlock_count}</span> 人共同扫码参与后才能查看内容，所有参与者都可查看。
+                        此记忆设置了多人联合解锁。您可以加入现有的解锁团，或者发起新的解锁团。凑齐 <span class="text-cyber-neon font-medium">${m.group_unlock_count}</span> 人后，所有参与者都可查看内容。
                     </p>
 
                     ${m.group_message ? `
@@ -426,34 +475,18 @@
                     </div>
                     ` : ''}
 
-                    <div class="mb-8 max-w-sm mx-auto">
-                        <div class="flex items-center justify-between mb-3 text-sm">
-                            <span class="text-gray-400">当前参与进度</span>
-                            <span class="text-cyber-neon font-bold">${m.group_current_count} / ${m.group_unlock_count} 人</span>
-                        </div>
-                        <div class="h-3 bg-gray-700 rounded-full overflow-hidden">
-                            <div class="h-full bg-gradient-to-r from-cyber-light to-cyber-neon transition-all duration-500" style="width: ${(m.group_current_count / m.group_unlock_count) * 100}%"></div>
-                        </div>
-                    </div>
+                    ${sessionsHtml}
 
                     <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6">
-                        ${!hasSession ? `
                         <button id="start-unlock-btn" onclick="startGroupUnlock()" class="bg-cyber-neon text-black px-8 py-3 rounded-lg font-bold hover:bg-pink-400 transition flex items-center gap-2">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            发起联合解锁
+                            发起新团
                         </button>
-                        ` : `
-                        <button id="join-unlock-btn" onclick="joinGroupUnlock()" class="bg-cyber-neon text-black px-8 py-3 rounded-lg font-bold hover:bg-pink-400 transition flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
-                            参与联合解锁
-                        </button>
-                        `}
                         <button onclick="loadMemory()" class="px-6 py-3 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-500 hover:text-white transition text-sm">
                             刷新状态
                         </button>
                     </div>
 
-                    ${hasSession ? `
                     <div id="share-section" class="hidden mb-6">
                         <p class="text-sm text-gray-400 mb-3">分享解锁链接给朋友，共同解锁：</p>
                         <div class="flex items-center gap-2 max-w-md mx-auto">
@@ -463,7 +496,6 @@
                             </button>
                         </div>
                     </div>
-                    ` : ''}
 
                     <div id="group-status" class="text-sm text-gray-500"></div>
 
@@ -519,6 +551,7 @@
         }
 
         async function startGroupUnlock() {
+            const container = document.getElementById('memory-container');
             const btn = document.getElementById('start-unlock-btn');
             const statusEl = document.getElementById('group-status');
             if (!btn || !statusEl) return;
@@ -577,13 +610,16 @@
             }
         }
 
-        async function joinGroupUnlock() {
-            const btn = document.getElementById('join-unlock-btn');
+        async function joinGroupUnlock(sessionId = null) {
+            const container = document.getElementById('memory-container');
+            const btn = sessionId ? document.querySelector(`[onclick="joinSpecificSession(${sessionId})"]`) : document.getElementById('join-unlock-btn');
             const statusEl = document.getElementById('group-status');
-            if (!btn || !statusEl) return;
+            if (!statusEl) return;
 
-            btn.disabled = true;
-            btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 处理中...';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 处理中...';
+            }
             statusEl.textContent = '';
 
             try {
@@ -591,6 +627,9 @@
                 if (currentLat && currentLon) {
                     body.lat = currentLat;
                     body.lon = currentLon;
+                }
+                if (sessionId) {
+                    body.session_id = sessionId;
                 }
 
                 const res = await fetch(`/api/memories/${memoryId}/unlock/group/join`, {
@@ -606,7 +645,9 @@
                     statusEl.className = 'text-sm text-green-400';
                     
                     if (data.unlocked) {
-                        btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 解锁成功！';
+                        if (btn) {
+                            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 解锁成功！';
+                        }
                         setTimeout(() => loadMemory(), 800);
                     } else {
                         const shareSection = document.getElementById('share-section');
@@ -616,28 +657,38 @@
                             shareSection.classList.remove('hidden');
                         }
 
-                        btn.disabled = false;
-                        btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 已参与解锁';
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 已参与';
+                        }
 
-                        const progressBar = container.querySelector('.h-3 > div');
-                        const countSpan = container.querySelector('.text-cyber-neon.font-bold');
-                        if (progressBar && countSpan && data.session) {
-                            progressBar.style.width = `${(data.session.current_count / data.session.required_count) * 100}%`;
-                            countSpan.textContent = `${data.session.current_count} / ${data.session.required_count} 人`;
+                        if (sessionId) {
+                            setTimeout(() => loadMemory(), 500);
+                        } else {
+                            const progressBar = container.querySelector('.h-3 > div');
+                            const countSpan = container.querySelector('.text-cyber-neon.font-bold');
+                            if (progressBar && countSpan && data.session) {
+                                progressBar.style.width = `${(data.session.current_count / data.session.required_count) * 100}%`;
+                                countSpan.textContent = `${data.session.current_count} / ${data.session.required_count} 人`;
+                            }
                         }
                     }
                 } else {
                     statusEl.textContent = data.message || '参与解锁失败';
                     statusEl.className = 'text-sm text-red-400';
-                    btn.disabled = false;
-                    btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+                    }
                 }
             } catch (err) {
                 console.error(err);
                 statusEl.textContent = '网络错误，请重试';
                 statusEl.className = 'text-sm text-red-400';
-                btn.disabled = false;
-                btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+                }
             }
         }
 
@@ -647,6 +698,19 @@
             input.select();
             document.execCommand('copy');
             showToast('解锁链接已复制到剪贴板');
+        }
+
+        function showShareLink(link) {
+            const shareSection = document.getElementById('share-section');
+            const unlockLinkInput = document.getElementById('unlock-link');
+            if (shareSection && unlockLinkInput) {
+                unlockLinkInput.value = link;
+                shareSection.classList.remove('hidden');
+            }
+        }
+
+        async function joinSpecificSession(sessionId) {
+            await joinGroupUnlock(sessionId);
         }
 
         async function loadCollabInfo() {
