@@ -203,6 +203,20 @@ class User(UserMixin, db.Model):
 VISIBILITY_PRIVATE = 'private'
 VISIBILITY_PUBLIC = 'public'
 
+UNLOCK_TYPE_NORMAL = 'normal'
+UNLOCK_TYPE_GEO = 'geo'
+UNLOCK_TYPE_GROUP = 'group'
+UNLOCK_TYPE_COMBINED = 'combined'
+VALID_UNLOCK_TYPES = [UNLOCK_TYPE_NORMAL, UNLOCK_TYPE_GEO, UNLOCK_TYPE_GROUP, UNLOCK_TYPE_COMBINED]
+
+GEO_RADIUS_OPTIONS = [
+    {'value': 100, 'label': '100米'},
+    {'value': 500, 'label': '500米'},
+    {'value': 1000, 'label': '1000米'},
+    {'value': 2000, 'label': '2000米'},
+    {'value': 5000, 'label': '5000米'},
+]
+
 class Memory(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -218,6 +232,13 @@ class Memory(db.Model):
     status = db.Column(db.String(20), default=MEMORY_STATUS_ACTIVE, nullable=False)
     unlock_time = db.Column(db.DateTime, nullable=True)
     visibility = db.Column(db.String(20), default=VISIBILITY_PRIVATE, nullable=False)
+    unlock_type = db.Column(db.String(20), default=UNLOCK_TYPE_NORMAL, nullable=False)
+    geo_latitude = db.Column(db.Float, nullable=True)
+    geo_longitude = db.Column(db.Float, nullable=True)
+    geo_radius = db.Column(db.Integer, nullable=True)
+    geo_address = db.Column(db.String(200), nullable=True)
+    group_unlock_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    group_unlock_count = db.Column(db.Integer, default=2, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -232,7 +253,58 @@ class Memory(db.Model):
             return False
         return datetime.utcnow() < self.unlock_time
 
-    def can_view(self, user=None):
+    def has_geo_lock(self):
+        return self.unlock_type in [UNLOCK_TYPE_GEO, UNLOCK_TYPE_COMBINED] and \
+               self.geo_latitude is not None and self.geo_longitude is not None and self.geo_radius is not None
+
+    def has_group_lock(self):
+        return self.unlock_type in [UNLOCK_TYPE_GROUP, UNLOCK_TYPE_COMBINED] and \
+               self.group_unlock_enabled and self.group_unlock_count > 1
+
+    def check_geo_unlock(self, user_lat, user_lon):
+        if not self.has_geo_lock():
+            return True, None
+        if user_lat is None or user_lon is None:
+            return False, '需要获取您的位置信息才能查看'
+        distance = calculate_distance(self.geo_latitude, self.geo_longitude, user_lat, user_lon)
+        if distance <= self.geo_radius:
+            return True, None
+        return False, f'您当前位置距离解锁地点还有 {distance:.0f} 米，需在 {self.geo_radius} 米范围内才能查看'
+
+    def check_group_unlock(self, user_id):
+        if not self.has_group_lock():
+            return True, None, None
+        if user_id is None:
+            return False, '需要登录后才能参与联合解锁', None
+        session = UnlockSession.query.filter_by(
+            memory_id=self.id, status='active'
+        ).order_by(UnlockSession.created_at.desc()).first()
+        if session and session.is_unlocked():
+            participant = UnlockParticipant.query.filter_by(
+                session_id=session.id, user_id=user_id
+            ).first()
+            if participant:
+                return True, None, session
+        current_count = 0
+        if session:
+            current_count = session.current_count
+        if not session:
+            return False, '尚未有人发起联合解锁，请先发起解锁', session
+        if session.current_count >= self.group_unlock_count:
+            participant = UnlockParticipant.query.filter_by(
+                session_id=session.id, user_id=user_id
+            ).first()
+            if participant:
+                return True, None, session
+            return False, '本轮联合解锁已完成，但您未参与，请发起新一轮解锁', session
+        participant = UnlockParticipant.query.filter_by(
+            session_id=session.id, user_id=user_id
+        ).first()
+        if participant:
+            return False, f'您已参与本轮解锁，还需 {self.group_unlock_count - current_count} 人参与', session
+        return False, f'还需 {self.group_unlock_count - current_count} 人参与解锁', session
+
+    def can_view(self, user=None, user_lat=None, user_lon=None, skip_geo=False, skip_group=False):
         if self.visibility == VISIBILITY_PUBLIC:
             return True
         if user and user.is_authenticated and user.id == self.user_id:
@@ -243,12 +315,44 @@ class Memory(db.Model):
             ).first()
             if collab:
                 return True
+            if self.has_group_lock():
+                participant = UnlockParticipant.query.join(UnlockSession).filter(
+                    UnlockSession.memory_id == self.id,
+                    UnlockSession.status == 'active',
+                    UnlockParticipant.user_id == user.id
+                ).first()
+                if participant:
+                    session = participant.session
+                    if session and session.is_unlocked():
+                        return True
         return False
 
-    def to_dict(self, viewer=None):
+    def to_dict(self, viewer=None, user_lat=None, user_lon=None):
         design_config = self.get_design_config()
-        locked = self.is_locked()
-        can_view = self.can_view(viewer)
+        time_locked = self.is_locked()
+        base_can_view = self.can_view(viewer)
+
+        geo_locked = False
+        geo_message = None
+        if self.has_geo_lock() and not (viewer and viewer.is_authenticated and viewer.id == self.user_id):
+            geo_unlocked, geo_msg = self.check_geo_unlock(user_lat, user_lon)
+            if not geo_unlocked:
+                geo_locked = True
+                geo_message = geo_msg
+
+        group_locked = False
+        group_message = None
+        group_session = None
+        viewer_id = viewer.id if viewer and viewer.is_authenticated else None
+        if self.has_group_lock() and not (viewer and viewer.is_authenticated and viewer.id == self.user_id):
+            group_unlocked, group_msg, session = self.check_group_unlock(viewer_id)
+            group_session = session
+            if not group_unlocked:
+                group_locked = True
+                group_message = group_msg
+
+        is_locked = time_locked or geo_locked or group_locked
+        can_view = base_can_view and not is_locked
 
         collab_count = Collaborator.query.filter_by(memory_id=self.id, status='active').count()
 
@@ -258,8 +362,22 @@ class Memory(db.Model):
             'status': self.status,
             'visibility': self.visibility,
             'unlock_time': self.unlock_time.strftime('%Y-%m-%d %H:%M:%S') if self.unlock_time else None,
-            'is_locked': locked,
+            'is_locked': is_locked,
+            'time_locked': time_locked,
             'can_view': can_view,
+            'unlock_type': self.unlock_type,
+            'geo_locked': geo_locked,
+            'geo_message': geo_message,
+            'geo_latitude': self.geo_latitude,
+            'geo_longitude': self.geo_longitude,
+            'geo_radius': self.geo_radius,
+            'geo_address': self.geo_address,
+            'group_locked': group_locked,
+            'group_message': group_message,
+            'group_unlock_enabled': self.group_unlock_enabled,
+            'group_unlock_count': self.group_unlock_count,
+            'group_current_count': group_session.current_count if group_session else 0,
+            'group_session_id': group_session.id if group_session else None,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else None,
             'author': self.author.username,
@@ -269,7 +387,7 @@ class Memory(db.Model):
             'collaborator_count': collab_count
         }
 
-        if not locked and can_view:
+        if not is_locked and can_view:
             result['text_content'] = self.text_content
             result['media_url'] = f'/static/uploads/{self.media_filename}' if self.media_filename else None
             result['media_type'] = self.media_type
@@ -480,12 +598,92 @@ def can_comment(memory_id, user_id):
     role = get_user_role(memory_id, user_id)
     return role in [COLLAB_ROLE_OWNER, COLLAB_ROLE_EDITOR, COLLAB_ROLE_COMMENTER]
 
+def calculate_distance(lat1, lon1, lat2, lon2):
+    import math
+    R = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = math.sin(delta_phi / 2) ** 2 + \
+        math.cos(phi1) * math.cos(phi2) * \
+        math.sin(delta_lambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
 def generate_invite_code(length=6):
     chars = string.ascii_uppercase + string.digits
     while True:
         code = ''.join(random.choices(chars, k=length))
         if not Invitation.query.filter_by(invite_code=code).first():
             return code
+
+def generate_unlock_code(length=8):
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(random.choices(chars, k=length))
+        if not UnlockSession.query.filter_by(unlock_code=code).first():
+            return code
+
+class UnlockSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    initiator_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    unlock_code = db.Column(db.String(8), unique=True, nullable=False)
+    required_count = db.Column(db.Integer, nullable=False, default=2)
+    current_count = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(20), default='active', nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    unlocked_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    memory = db.relationship('Memory', backref='unlock_sessions')
+    initiator = db.relationship('User', backref='initiated_unlocks')
+    participants = db.relationship('UnlockParticipant', backref='session', lazy=True, cascade='all, delete-orphan')
+
+    def is_unlocked(self):
+        return self.status == 'unlocked' or self.current_count >= self.required_count
+
+    def get_unlock_link(self):
+        base_url = get_base_url()
+        return f"{base_url}/view_memory.html?id={self.memory_id}&unlock_code={self.unlock_code}"
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'initiator_id': self.initiator_id,
+            'initiator_username': self.initiator.username if self.initiator else None,
+            'unlock_code': self.unlock_code,
+            'unlock_link': self.get_unlock_link(),
+            'required_count': self.required_count,
+            'current_count': self.current_count,
+            'status': self.status,
+            'is_unlocked': self.is_unlocked(),
+            'expires_at': self.expires_at.strftime('%Y-%m-%d %H:%M:%S') if self.expires_at else None,
+            'unlocked_at': self.unlocked_at.strftime('%Y-%m-%d %H:%M:%S') if self.unlocked_at else None,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None,
+            'participants': [p.to_dict() for p in self.participants]
+        }
+
+class UnlockParticipant(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('unlock_session.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_latitude = db.Column(db.Float, nullable=True)
+    user_longitude = db.Column(db.Float, nullable=True)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='unlock_participations')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'session_id': self.session_id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'joined_at': self.joined_at.strftime('%Y-%m-%d %H:%M') if self.joined_at else None
+        }
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -609,12 +807,22 @@ def create_memory():
     status = request.form.get('status', MEMORY_STATUS_ACTIVE)
     unlock_time_str = request.form.get('unlock_time', '')
     visibility = request.form.get('visibility', VISIBILITY_PRIVATE)
+    unlock_type = request.form.get('unlock_type', UNLOCK_TYPE_NORMAL)
+    geo_latitude = request.form.get('geo_latitude', None)
+    geo_longitude = request.form.get('geo_longitude', None)
+    geo_radius = request.form.get('geo_radius', None)
+    geo_address = request.form.get('geo_address', '')
+    group_unlock_enabled = request.form.get('group_unlock_enabled', 'false').lower() == 'true'
+    group_unlock_count = request.form.get('group_unlock_count', 2, type=int)
 
     if status not in [MEMORY_STATUS_ACTIVE, MEMORY_STATUS_DRAFT, MEMORY_STATUS_ARCHIVED]:
         status = MEMORY_STATUS_ACTIVE
 
     if visibility not in [VISIBILITY_PRIVATE, VISIBILITY_PUBLIC]:
         visibility = VISIBILITY_PRIVATE
+
+    if unlock_type not in VALID_UNLOCK_TYPES:
+        unlock_type = UNLOCK_TYPE_NORMAL
 
     unlock_time = parse_unlock_time(unlock_time_str)
 
@@ -624,6 +832,38 @@ def create_memory():
         return jsonify({'success': False, 'message': f'Title too long (max {MAX_TITLE_LENGTH} characters)'}), 400
     if text and len(text) > MAX_TEXT_LENGTH:
         return jsonify({'success': False, 'message': f'Content too long (max {MAX_TEXT_LENGTH} characters)'}), 400
+
+    if unlock_type in [UNLOCK_TYPE_GEO, UNLOCK_TYPE_COMBINED]:
+        if geo_latitude is None or geo_longitude is None or geo_radius is None:
+            return jsonify({'success': False, 'message': '地理位置解锁需要提供经纬度和范围'}), 400
+        try:
+            geo_latitude = float(geo_latitude)
+            geo_longitude = float(geo_longitude)
+            geo_radius = int(geo_radius)
+            if not (-90 <= geo_latitude <= 90):
+                return jsonify({'success': False, 'message': '纬度必须在 -90 到 90 之间'}), 400
+            if not (-180 <= geo_longitude <= 180):
+                return jsonify({'success': False, 'message': '经度必须在 -180 到 180 之间'}), 400
+            if geo_radius <= 0:
+                return jsonify({'success': False, 'message': '范围必须大于0米'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': '地理位置参数格式错误'}), 400
+    else:
+        geo_latitude = None
+        geo_longitude = None
+        geo_radius = None
+        geo_address = None
+
+    if unlock_type in [UNLOCK_TYPE_GROUP, UNLOCK_TYPE_COMBINED]:
+        if not group_unlock_enabled:
+            group_unlock_enabled = True
+        if group_unlock_count < 2:
+            group_unlock_count = 2
+        if group_unlock_count > 10:
+            group_unlock_count = 10
+    else:
+        group_unlock_enabled = False
+        group_unlock_count = 2
 
     media_filename = None
     media_type = None
@@ -655,12 +895,19 @@ def create_memory():
             status=status,
             unlock_time=unlock_time,
             visibility=visibility,
+            unlock_type=unlock_type,
+            geo_latitude=geo_latitude,
+            geo_longitude=geo_longitude,
+            geo_radius=geo_radius,
+            geo_address=geo_address,
+            group_unlock_enabled=group_unlock_enabled,
+            group_unlock_count=group_unlock_count,
             author=current_user
         )
         db.session.add(memory)
         db.session.commit()
         app.logger.info(f"Memory created: {memory.id} by user {current_user.username}")
-        log_operation('create_memory', f'Created memory: {title}', memory_id=memory.id)
+        log_operation('create_memory', f'Created memory: {title}, unlock_type: {unlock_type}', memory_id=memory.id)
         return jsonify({'success': True, 'id': memory.id, 'view_url': memory.to_dict()['view_url']})
     except Exception as e:
         app.logger.error(f"Error creating memory: {str(e)}")
@@ -670,19 +917,38 @@ def create_memory():
 def get_memory(memory_id):
     memory = Memory.query.get_or_404(memory_id)
     
+    user_lat = request.args.get('lat', None, type=float)
+    user_lon = request.args.get('lon', None, type=float)
+    
+    viewer = current_user if current_user.is_authenticated else None
+    
     if memory.is_locked():
         log_operation('view_locked_memory', f'Attempted to view locked memory: {memory.title}', memory_id=memory.id)
-        return jsonify(memory.to_dict(viewer=current_user if current_user.is_authenticated else None))
+        return jsonify(memory.to_dict(viewer=viewer, user_lat=user_lat, user_lon=user_lon))
     
-    if not memory.can_view(current_user if current_user.is_authenticated else None):
+    if not memory.can_view(viewer, user_lat, user_lon):
         if not current_user.is_authenticated:
             return jsonify({'error': 'auth_required', 'message': 'Please login'}), 401
+        
+        if memory.has_geo_lock():
+            geo_unlocked, geo_msg = memory.check_geo_unlock(user_lat, user_lon)
+            if not geo_unlocked:
+                log_operation('geo_lock_denied', f'Geo location check failed: {geo_msg}', memory_id=memory.id)
+                return jsonify(memory.to_dict(viewer=viewer, user_lat=user_lat, user_lon=user_lon))
+        
+        if memory.has_group_lock():
+            viewer_id = viewer.id if viewer else None
+            group_unlocked, group_msg, session = memory.check_group_unlock(viewer_id)
+            if not group_unlocked:
+                log_operation('group_lock_denied', f'Group unlock check failed: {group_msg}', memory_id=memory.id)
+                return jsonify(memory.to_dict(viewer=viewer, user_lat=user_lat, user_lon=user_lon))
+        
         app.logger.warning(f"Unauthorized access attempt to memory {memory_id} by user {current_user.username}")
         log_operation('unauthorized_access', f'Attempted to access memory {memory_id}', memory_id=memory_id)
         return jsonify({'error': 'Forbidden'}), 403
 
     log_operation('view_memory', f'Viewed memory: {memory.title}', memory_id=memory.id)
-    return jsonify(memory.to_dict(viewer=current_user if current_user.is_authenticated else None))
+    return jsonify(memory.to_dict(viewer=viewer, user_lat=user_lat, user_lon=user_lon))
 
 @app.route('/api/memories/<memory_id>', methods=['PUT'])
 @login_required
@@ -699,6 +965,13 @@ def update_memory(memory_id):
     new_status = request.form.get('status', '')
     unlock_time_str = request.form.get('unlock_time', '')
     visibility = request.form.get('visibility', '')
+    unlock_type = request.form.get('unlock_type', None)
+    geo_latitude = request.form.get('geo_latitude', None)
+    geo_longitude = request.form.get('geo_longitude', None)
+    geo_radius = request.form.get('geo_radius', None)
+    geo_address = request.form.get('geo_address', None)
+    group_unlock_enabled = request.form.get('group_unlock_enabled', None)
+    group_unlock_count = request.form.get('group_unlock_count', None, type=int)
 
     if title:
         if len(title) > MAX_TITLE_LENGTH:
@@ -723,6 +996,43 @@ def update_memory(memory_id):
 
     if visibility and visibility in [VISIBILITY_PRIVATE, VISIBILITY_PUBLIC]:
         memory.visibility = visibility
+
+    if unlock_type and unlock_type in VALID_UNLOCK_TYPES:
+        memory.unlock_type = unlock_type
+
+    if geo_latitude is not None and geo_longitude is not None and geo_radius is not None:
+        try:
+            lat = float(geo_latitude)
+            lon = float(geo_longitude)
+            radius = int(geo_radius)
+            if not (-90 <= lat <= 90):
+                return jsonify({'success': False, 'message': '纬度必须在 -90 到 90 之间'}), 400
+            if not (-180 <= lon <= 180):
+                return jsonify({'success': False, 'message': '经度必须在 -180 到 180 之间'}), 400
+            if radius <= 0:
+                return jsonify({'success': False, 'message': '范围必须大于0米'}), 400
+            memory.geo_latitude = lat
+            memory.geo_longitude = lon
+            memory.geo_radius = radius
+            if geo_address is not None:
+                memory.geo_address = geo_address[:200]
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': '地理位置参数格式错误'}), 400
+    elif geo_latitude == '' or geo_latitude == 'null':
+        memory.geo_latitude = None
+        memory.geo_longitude = None
+        memory.geo_radius = None
+        memory.geo_address = None
+
+    if group_unlock_enabled is not None:
+        memory.group_unlock_enabled = group_unlock_enabled.lower() == 'true'
+
+    if group_unlock_count is not None:
+        if group_unlock_count < 2:
+            group_unlock_count = 2
+        if group_unlock_count > 10:
+            group_unlock_count = 10
+        memory.group_unlock_count = group_unlock_count
 
     if remove_media and memory.media_filename:
         old_file = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
@@ -1138,14 +1448,299 @@ def scan_memory(memory_id):
     if memory.status != MEMORY_STATUS_ACTIVE:
         return jsonify({'success': False, 'message': 'This memory is not available'}), 404
 
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+
+    if user_lat is not None:
+        try:
+            user_lat = float(user_lat)
+        except (ValueError, TypeError):
+            user_lat = None
+    if user_lon is not None:
+        try:
+            user_lon = float(user_lon)
+        except (ValueError, TypeError):
+            user_lon = None
+
     log_operation('qr_scan', f'QR code scanned for memory: {memory.title}', memory_id=memory_id, ip=request.remote_addr)
+
+    viewer = current_user if current_user.is_authenticated else None
+    memory_dict = memory.to_dict(viewer=viewer, user_lat=user_lat, user_lon=user_lon)
 
     view_url = app.config['MEMORY_VIEW_URL'] + '?id=' + memory.id
     return jsonify({
         'success': True,
         'memory_id': memory.id,
         'view_url': view_url,
-        'is_locked': memory.is_locked()
+        'is_locked': memory_dict['is_locked'],
+        'geo_locked': memory_dict.get('geo_locked', False),
+        'geo_message': memory_dict.get('geo_message', None),
+        'group_locked': memory_dict.get('group_locked', False),
+        'group_message': memory_dict.get('group_message', None),
+        'unlock_type': memory_dict.get('unlock_type', 'normal')
+    })
+
+@app.route('/api/memories/<memory_id>/unlock/geo-check', methods=['POST'])
+@login_required
+def check_geo_unlock(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    
+    if not memory.has_geo_lock():
+        return jsonify({'success': True, 'unlocked': True, 'message': '此记忆没有地理位置限制'})
+    
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    
+    if user_lat is None or user_lon is None:
+        return jsonify({'success': False, 'unlocked': False, 'message': '需要提供位置信息'}), 400
+    
+    try:
+        user_lat = float(user_lat)
+        user_lon = float(user_lon)
+    except (ValueError, TypeError):
+        return jsonify({'success': False, 'unlocked': False, 'message': '位置信息格式错误'}), 400
+    
+    unlocked, message = memory.check_geo_unlock(user_lat, user_lon)
+    distance = calculate_distance(memory.geo_latitude, memory.geo_longitude, user_lat, user_lon)
+    
+    log_operation(
+        'geo_check',
+        f'Geo check - lat: {user_lat:.6f}, lon: {user_lon:.6f}, distance: {distance:.0f}m, unlocked: {unlocked}',
+        memory_id=memory_id
+    )
+    
+    return jsonify({
+        'success': True,
+        'unlocked': unlocked,
+        'message': message,
+        'distance': distance,
+        'required_radius': memory.geo_radius,
+        'target_latitude': memory.geo_latitude,
+        'target_longitude': memory.geo_longitude,
+        'target_address': memory.geo_address
+    })
+
+@app.route('/api/memories/<memory_id>/unlock/group/start', methods=['POST'])
+@login_required
+def start_group_unlock(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    
+    if not memory.has_group_lock():
+        return jsonify({'success': False, 'message': '此记忆没有设置多人联合解锁'}), 400
+    
+    if memory.user_id == current_user.id:
+        return jsonify({'success': False, 'message': '创建者无需参与联合解锁'}), 400
+    
+    existing_session = UnlockSession.query.filter_by(
+        memory_id=memory_id, status='active'
+    ).order_by(UnlockSession.created_at.desc()).first()
+    
+    if existing_session and not existing_session.is_unlocked():
+        existing_participant = UnlockParticipant.query.filter_by(
+            session_id=existing_session.id, user_id=current_user.id
+        ).first()
+        if existing_participant:
+            return jsonify({
+                'success': True,
+                'session': existing_session.to_dict(),
+                'message': '您已在当前解锁会话中'
+            })
+    
+    unlock_code = generate_unlock_code()
+    session = UnlockSession(
+        memory_id=memory_id,
+        initiator_id=current_user.id,
+        unlock_code=unlock_code,
+        required_count=memory.group_unlock_count
+    )
+    db.session.add(session)
+    db.session.flush()
+    
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    
+    participant = UnlockParticipant(
+        session_id=session.id,
+        user_id=current_user.id,
+        user_latitude=user_lat,
+        user_longitude=user_lon
+    )
+    db.session.add(participant)
+    session.current_count = 1
+    
+    try:
+        db.session.commit()
+        log_collab_action(
+            memory_id,
+            'start_group_unlock',
+            f'{current_user.username} 发起了多人联合解锁，需要 {memory.group_unlock_count} 人参与'
+        )
+        log_operation('group_unlock_start', f'Started group unlock session {unlock_code}', memory_id=memory_id)
+        
+        return jsonify({
+            'success': True,
+            'session': session.to_dict(),
+            'message': f'已发起联合解锁，还需 {memory.group_unlock_count - 1} 人参与'
+        })
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error starting group unlock: {str(e)}")
+        return jsonify({'success': False, 'message': '发起解锁失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/unlock/group/join', methods=['POST'])
+@login_required
+def join_group_unlock(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    
+    if not memory.has_group_lock():
+        return jsonify({'success': False, 'message': '此记忆没有设置多人联合解锁'}), 400
+    
+    if memory.user_id == current_user.id:
+        return jsonify({'success': False, 'message': '创建者无需参与联合解锁'}), 400
+    
+    session = UnlockSession.query.filter_by(
+        memory_id=memory_id, status='active'
+    ).order_by(UnlockSession.created_at.desc()).first()
+    
+    if not session:
+        return jsonify({'success': False, 'message': '当前没有进行中的解锁会话，请先发起解锁'}), 400
+    
+    if session.is_unlocked():
+        participant = UnlockParticipant.query.filter_by(
+            session_id=session.id, user_id=current_user.id
+        ).first()
+        if participant:
+            return jsonify({
+                'success': True,
+                'session': session.to_dict(),
+                'unlocked': True,
+                'message': '记忆已解锁'
+            })
+        return jsonify({
+            'success': False,
+            'message': '本轮解锁已完成，但您未参与。请发起新一轮解锁。'
+        }), 400
+    
+    existing_participant = UnlockParticipant.query.filter_by(
+        session_id=session.id, user_id=current_user.id
+    ).first()
+    if existing_participant:
+        return jsonify({
+            'success': True,
+            'session': session.to_dict(),
+            'message': f'您已参与本轮解锁，还需 {session.required_count - session.current_count} 人'
+        })
+    
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    
+    participant = UnlockParticipant(
+        session_id=session.id,
+        user_id=current_user.id,
+        user_latitude=user_lat,
+        user_longitude=user_lon
+    )
+    db.session.add(participant)
+    session.current_count += 1
+    
+    if session.current_count >= session.required_count:
+        session.status = 'unlocked'
+        session.unlocked_at = datetime.utcnow()
+        unlocked = True
+        message = '解锁成功！记忆内容现在可以查看了'
+    else:
+        unlocked = False
+        message = f'参与成功！还需 {session.required_count - session.current_count} 人参与解锁'
+    
+    try:
+        db.session.commit()
+        log_collab_action(
+            memory_id,
+            'join_group_unlock',
+            f'{current_user.username} 参与了联合解锁，当前 {session.current_count}/{session.required_count} 人'
+        )
+        log_operation('group_unlock_join', f'Joined unlock session {session.unlock_code}', memory_id=memory_id)
+        
+        return jsonify({
+            'success': True,
+            'session': session.to_dict(),
+            'unlocked': unlocked,
+            'message': message
+        })
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error joining group unlock: {str(e)}")
+        return jsonify({'success': False, 'message': '参与解锁失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/unlock/group/status', methods=['GET'])
+@login_required
+def get_group_unlock_status(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    
+    session = UnlockSession.query.filter_by(
+        memory_id=memory_id
+    ).order_by(UnlockSession.created_at.desc()).first()
+    
+    if not session:
+        return jsonify({
+            'success': True,
+            'has_session': False,
+            'session': None,
+            'required_count': memory.group_unlock_count,
+            'current_count': 0,
+            'unlocked': False
+        })
+    
+    participant = None
+    if current_user.is_authenticated:
+        participant = UnlockParticipant.query.filter_by(
+            session_id=session.id, user_id=current_user.id
+        ).first()
+    
+    return jsonify({
+        'success': True,
+        'has_session': True,
+        'session': session.to_dict(),
+        'required_count': memory.group_unlock_count,
+        'current_count': session.current_count,
+        'unlocked': session.is_unlocked(),
+        'is_participant': participant is not None
+    })
+
+@app.route('/api/unlock/session/<unlock_code>', methods=['GET'])
+@login_required
+def get_unlock_session_by_code(unlock_code):
+    session = UnlockSession.query.filter_by(unlock_code=unlock_code).first()
+    if not session:
+        return jsonify({'success': False, 'message': '无效的解锁链接'}), 404
+    
+    memory = Memory.query.get(session.memory_id)
+    if not memory:
+        return jsonify({'success': False, 'message': '关联的记忆不存在'}), 404
+    
+    participant = None
+    if current_user.is_authenticated:
+        participant = UnlockParticipant.query.filter_by(
+            session_id=session.id, user_id=current_user.id
+        ).first()
+    
+    return jsonify({
+        'success': True,
+        'session': session.to_dict(),
+        'memory': {
+            'id': memory.id,
+            'title': memory.title,
+            'author': memory.author.username if memory.author else None,
+            'unlock_type': memory.unlock_type,
+            'has_geo_lock': memory.has_geo_lock(),
+            'geo_address': memory.geo_address
+        },
+        'is_participant': participant is not None,
+        'is_owner': memory.user_id == current_user.id
     })
 
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'src')
@@ -1582,9 +2177,9 @@ def init_db():
     inspector = inspect(db.engine)
 
     existing_tables = inspector.get_table_names()
-    for table_name in ['collaborator', 'collaboration_log', 'invitation', 'join_request', 'memory_comment']:
+    for table_name in ['collaborator', 'collaboration_log', 'invitation', 'join_request', 'memory_comment', 'unlock_session', 'unlock_participant']:
         if table_name not in existing_tables:
-            app.logger.info(f"Collaboration table '{table_name}' will be created by db.create_all()")
+            app.logger.info(f"Table '{table_name}' will be created by db.create_all()")
 
     db.create_all()
 
@@ -1662,6 +2257,69 @@ def init_db():
                 app.logger.info("Added 'visibility' column to memory table")
             except Exception as e:
                 app.logger.warning(f"Could not add visibility column: {e}")
+
+        if 'unlock_type' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN unlock_type VARCHAR(20) DEFAULT 'normal' NOT NULL"))
+                    conn.commit()
+                app.logger.info("Added 'unlock_type' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add unlock_type column: {e}")
+
+        if 'geo_latitude' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN geo_latitude FLOAT"))
+                    conn.commit()
+                app.logger.info("Added 'geo_latitude' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add geo_latitude column: {e}")
+
+        if 'geo_longitude' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN geo_longitude FLOAT"))
+                    conn.commit()
+                app.logger.info("Added 'geo_longitude' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add geo_longitude column: {e}")
+
+        if 'geo_radius' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN geo_radius INTEGER"))
+                    conn.commit()
+                app.logger.info("Added 'geo_radius' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add geo_radius column: {e}")
+
+        if 'geo_address' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN geo_address VARCHAR(200)"))
+                    conn.commit()
+                app.logger.info("Added 'geo_address' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add geo_address column: {e}")
+
+        if 'group_unlock_enabled' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN group_unlock_enabled BOOLEAN DEFAULT 0 NOT NULL"))
+                    conn.commit()
+                app.logger.info("Added 'group_unlock_enabled' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add group_unlock_enabled column: {e}")
+
+        if 'group_unlock_count' not in columns:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE memory ADD COLUMN group_unlock_count INTEGER DEFAULT 2 NOT NULL"))
+                    conn.commit()
+                app.logger.info("Added 'group_unlock_count' column to memory table")
+            except Exception as e:
+                app.logger.warning(f"Could not add group_unlock_count column: {e}")
 
     # Create test user if not exists
     if not User.query.filter_by(username='admin').first():

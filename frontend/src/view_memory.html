@@ -311,6 +311,325 @@
         };
 
         let myRole = null;
+        let currentLat = null;
+        let currentLon = null;
+        let unlockSessionId = null;
+
+        async function getCurrentPosition() {
+            return new Promise((resolve, reject) => {
+                if (!navigator.geolocation) {
+                    reject(new Error('浏览器不支持地理定位'));
+                    return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        currentLat = pos.coords.latitude;
+                        currentLon = pos.coords.longitude;
+                        resolve({ lat: currentLat, lon: currentLon });
+                    },
+                    (err) => reject(err),
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+            });
+        }
+
+        function renderGeoLocked(m) {
+            const container = document.getElementById('memory-container');
+            document.getElementById('action-buttons').classList.add('hidden');
+            document.getElementById('qr-section').classList.add('hidden');
+
+            container.innerHTML = `
+                <div class="p-8 md:p-16 text-center">
+                    <div class="w-28 h-28 mx-auto bg-cyber-light/20 rounded-full flex items-center justify-center mb-8 border border-cyber-light/30">
+                        <svg class="w-14 h-14 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                    </div>
+
+                    <h1 class="text-3xl md:text-4xl font-bold gradient-text mb-4">${m.title}</h1>
+
+                    <div class="flex items-center justify-center gap-3 mb-6 text-sm flex-wrap">
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-light/20 text-cyber-light border border-cyber-light/30">
+                            📍 地理位置锁定
+                        </span>
+                        ${m.unlock_time ? `
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
+                            🔒 时光胶囊已锁定
+                        </span>
+                        ` : ''}
+                    </div>
+
+                    <p class="text-gray-400 mb-6 max-w-md mx-auto">
+                        此记忆设置了地理位置解锁。您需要前往 <span class="text-cyber-light font-medium">${m.geo_address || '指定地点'}</span> 附近 ${m.geo_radius} 米范围内才能查看内容。
+                    </p>
+
+                    ${m.geo_message ? `
+                    <div class="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p class="text-yellow-400 text-sm">${m.geo_message}</p>
+                    </div>
+                    ` : ''}
+
+                    <div class="mb-8">
+                        <button id="check-location-btn" onclick="checkGeoUnlock()" class="bg-cyber-light text-cyber-dark px-8 py-3 rounded-lg font-bold hover:bg-blue-400 transition flex items-center gap-2 mx-auto">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            验证当前位置
+                        </button>
+                    </div>
+
+                    <div id="geo-status" class="text-sm text-gray-500"></div>
+
+                    <div class="mt-12 text-xs text-gray-600">
+                        <p>By ${m.author} · 创建于 ${m.created_at}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderGroupLocked(m) {
+            const container = document.getElementById('memory-container');
+            document.getElementById('action-buttons').classList.add('hidden');
+            document.getElementById('qr-section').classList.add('hidden');
+
+            const isInitiator = false;
+            const hasSession = m.group_session_id != null;
+            const needMore = m.group_unlock_count - m.group_current_count;
+
+            container.innerHTML = `
+                <div class="p-8 md:p-16 text-center">
+                    <div class="w-28 h-28 mx-auto bg-cyber-neon/20 rounded-full flex items-center justify-center mb-8 border border-cyber-neon/30">
+                        <svg class="w-14 h-14 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                    </div>
+
+                    <h1 class="text-3xl md:text-4xl font-bold gradient-text mb-4">${m.title}</h1>
+
+                    <div class="flex items-center justify-center gap-3 mb-6 text-sm flex-wrap">
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
+                            👥 多人联合解锁
+                        </span>
+                        ${m.unlock_time ? `
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
+                            🔒 时光胶囊已锁定
+                        </span>
+                        ` : ''}
+                    </div>
+
+                    <p class="text-gray-400 mb-6 max-w-md mx-auto">
+                        此记忆设置了多人联合解锁。需要 <span class="text-cyber-neon font-medium">${m.group_unlock_count}</span> 人共同扫码参与后才能查看内容，所有参与者都可查看。
+                    </p>
+
+                    ${m.group_message ? `
+                    <div class="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p class="text-yellow-400 text-sm">${m.group_message}</p>
+                    </div>
+                    ` : ''}
+
+                    <div class="mb-8 max-w-sm mx-auto">
+                        <div class="flex items-center justify-between mb-3 text-sm">
+                            <span class="text-gray-400">当前参与进度</span>
+                            <span class="text-cyber-neon font-bold">${m.group_current_count} / ${m.group_unlock_count} 人</span>
+                        </div>
+                        <div class="h-3 bg-gray-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-gradient-to-r from-cyber-light to-cyber-neon transition-all duration-500" style="width: ${(m.group_current_count / m.group_unlock_count) * 100}%"></div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6">
+                        ${!hasSession ? `
+                        <button id="start-unlock-btn" onclick="startGroupUnlock()" class="bg-cyber-neon text-black px-8 py-3 rounded-lg font-bold hover:bg-pink-400 transition flex items-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            发起联合解锁
+                        </button>
+                        ` : `
+                        <button id="join-unlock-btn" onclick="joinGroupUnlock()" class="bg-cyber-neon text-black px-8 py-3 rounded-lg font-bold hover:bg-pink-400 transition flex items-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
+                            参与联合解锁
+                        </button>
+                        `}
+                        <button onclick="loadMemory()" class="px-6 py-3 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-500 hover:text-white transition text-sm">
+                            刷新状态
+                        </button>
+                    </div>
+
+                    ${hasSession ? `
+                    <div id="share-section" class="hidden mb-6">
+                        <p class="text-sm text-gray-400 mb-3">分享解锁链接给朋友，共同解锁：</p>
+                        <div class="flex items-center gap-2 max-w-md mx-auto">
+                            <input type="text" id="unlock-link" readonly class="flex-1 bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-sm text-gray-300" value="">
+                            <button onclick="copyUnlockLink()" class="bg-cyber-light text-cyber-dark px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-400 transition shrink-0">
+                                复制
+                            </button>
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    <div id="group-status" class="text-sm text-gray-500"></div>
+
+                    <div class="mt-12 text-xs text-gray-600">
+                        <p>By ${m.author} · 创建于 ${m.created_at}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function checkGeoUnlock() {
+            const btn = document.getElementById('check-location-btn');
+            const statusEl = document.getElementById('geo-status');
+            if (!btn || !statusEl) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 获取位置中...';
+            statusEl.textContent = '';
+
+            try {
+                await getCurrentPosition();
+                
+                const res = await fetch(`/api/memories/${memoryId}?lat=${currentLat}&lon=${currentLon}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    memoryData = data;
+                    
+                    if (data.geo_locked) {
+                        statusEl.textContent = data.geo_message || '位置验证失败，请前往指定地点';
+                        statusEl.className = 'text-sm text-yellow-400';
+                    } else {
+                        statusEl.textContent = '位置验证成功！';
+                        statusEl.className = 'text-sm text-green-400';
+                        setTimeout(() => loadMemory(), 500);
+                        return;
+                    }
+                }
+            } catch (err) {
+                let message = '获取位置失败';
+                if (err.code === err.PERMISSION_DENIED) {
+                    message = '您拒绝了位置权限请求，请在浏览器设置中允许访问位置';
+                } else if (err.code === err.POSITION_UNAVAILABLE) {
+                    message = '位置信息不可用';
+                } else if (err.code === err.TIMEOUT) {
+                    message = '获取位置超时，请重试';
+                }
+                statusEl.textContent = message;
+                statusEl.className = 'text-sm text-red-400';
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> 重新验证位置';
+        }
+
+        async function startGroupUnlock() {
+            const btn = document.getElementById('start-unlock-btn');
+            const statusEl = document.getElementById('group-status');
+            if (!btn || !statusEl) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 处理中...';
+            statusEl.textContent = '';
+
+            try {
+                const body = {};
+                if (currentLat && currentLon) {
+                    body.lat = currentLat;
+                    body.lon = currentLon;
+                }
+
+                const res = await fetch(`/api/memories/${memoryId}/unlock/group/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    unlockSessionId = data.session.id;
+                    statusEl.textContent = data.message || '已发起联合解锁';
+                    statusEl.className = 'text-sm text-green-400';
+                    
+                    const shareSection = document.getElementById('share-section');
+                    const unlockLinkInput = document.getElementById('unlock-link');
+                    if (shareSection && unlockLinkInput) {
+                        unlockLinkInput.value = data.session.unlock_link;
+                        shareSection.classList.remove('hidden');
+                    }
+                    
+                    setTimeout(() => loadMemory(), 500);
+                } else {
+                    statusEl.textContent = data.message || '发起解锁失败';
+                    statusEl.className = 'text-sm text-red-400';
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg> 重新发起';
+                }
+            } catch (err) {
+                console.error(err);
+                statusEl.textContent = '网络错误，请重试';
+                statusEl.className = 'text-sm text-red-400';
+                btn.disabled = false;
+                btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg> 重新发起';
+            }
+        }
+
+        async function joinGroupUnlock() {
+            const btn = document.getElementById('join-unlock-btn');
+            const statusEl = document.getElementById('group-status');
+            if (!btn || !statusEl) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 处理中...';
+            statusEl.textContent = '';
+
+            try {
+                const body = {};
+                if (currentLat && currentLon) {
+                    body.lat = currentLat;
+                    body.lon = currentLon;
+                }
+
+                const res = await fetch(`/api/memories/${memoryId}/unlock/group/join`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    unlockSessionId = data.session.id;
+                    statusEl.textContent = data.message || '参与成功';
+                    statusEl.className = 'text-sm text-green-400';
+                    
+                    if (data.unlocked) {
+                        setTimeout(() => loadMemory(), 500);
+                    } else {
+                        const shareSection = document.getElementById('share-section');
+                        const unlockLinkInput = document.getElementById('unlock-link');
+                        if (shareSection && unlockLinkInput) {
+                            unlockLinkInput.value = data.session.unlock_link;
+                            shareSection.classList.remove('hidden');
+                        }
+                        setTimeout(() => loadMemory(), 1000);
+                    }
+                } else {
+                    statusEl.textContent = data.message || '参与解锁失败';
+                    statusEl.className = 'text-sm text-red-400';
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+                }
+            } catch (err) {
+                console.error(err);
+                statusEl.textContent = '网络错误，请重试';
+                statusEl.className = 'text-sm text-red-400';
+                btn.disabled = false;
+                btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg> 重新参与';
+            }
+        }
+
+        function copyUnlockLink() {
+            const input = document.getElementById('unlock-link');
+            if (!input) return;
+            input.select();
+            document.execCommand('copy');
+            showToast('解锁链接已复制到剪贴板');
+        }
 
         async function loadCollabInfo() {
             if (!memoryId) return;
@@ -423,7 +742,11 @@
             const container = document.getElementById('memory-container');
 
             try {
-                const res = await fetch(`/api/memories/${memoryId}`);
+                let url = `/api/memories/${memoryId}`;
+                if (currentLat && currentLon) {
+                    url += `?lat=${currentLat}&lon=${currentLon}`;
+                }
+                const res = await fetch(url);
 
                 if (res.status === 401) {
                     const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
@@ -455,45 +778,67 @@
                 }
 
                 if (m.is_locked) {
-                    document.getElementById('action-buttons').classList.add('hidden');
-                    document.getElementById('qr-section').classList.add('hidden');
+                    if (m.time_locked !== false) {
+                        document.getElementById('action-buttons').classList.add('hidden');
+                        document.getElementById('qr-section').classList.add('hidden');
 
-                    container.innerHTML = `
-                        <div class="p-8 md:p-16 text-center">
-                            <div class="w-28 h-28 mx-auto bg-cyber-neon/20 rounded-full flex items-center justify-center mb-8 border border-cyber-neon/30">
-                                <svg class="w-14 h-14 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                                </svg>
+                        container.innerHTML = `
+                            <div class="p-8 md:p-16 text-center">
+                                <div class="w-28 h-28 mx-auto bg-cyber-neon/20 rounded-full flex items-center justify-center mb-8 border border-cyber-neon/30">
+                                    <svg class="w-14 h-14 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                                    </svg>
+                                </div>
+
+                                <h1 class="text-3xl md:text-4xl font-bold gradient-text mb-4">${m.title}</h1>
+
+                                <div class="flex items-center justify-center gap-3 mb-6 text-sm flex-wrap">
+                                    <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
+                                        🔒 时光胶囊已锁定
+                                    </span>
+                                    ${m.geo_locked ? `
+                                    <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-light/20 text-cyber-light border border-cyber-light/30">
+                                        📍 地理位置锁定
+                                    </span>
+                                    ` : ''}
+                                    ${m.group_locked ? `
+                                    <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
+                                        👥 多人联合锁定
+                                    </span>
+                                    ` : ''}
+                                    <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${m.visibility === 'public' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'}">
+                                        ${getVisibilityLabel(m.visibility)}
+                                    </span>
+                                </div>
+
+                                <p class="text-gray-400 mb-8 max-w-md mx-auto">
+                                    这颗胶囊被时间封印着。在 ${m.unlock_time ? m.unlock_time.slice(0, 16).replace('T', ' ') : ''} 之前，
+                                    任何人（包括创建者）都无法查看其中的内容。
+                                </p>
+
+                                <div class="mb-4 text-sm text-gray-500">距离解锁还有</div>
+                                <div id="countdown-display"></div>
+
+                                <div class="mt-12 text-xs text-gray-600">
+                                    <p>By ${m.author} · 创建于 ${m.created_at}</p>
+                                </div>
                             </div>
+                        `;
 
-                            <h1 class="text-3xl md:text-4xl font-bold gradient-text mb-4">${m.title}</h1>
-
-                            <div class="flex items-center justify-center gap-3 mb-6 text-sm">
-                                <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">
-                                    🔒 时光胶囊已锁定
-                                </span>
-                                <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${m.visibility === 'public' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'}">
-                                    ${getVisibilityLabel(m.visibility)}
-                                </span>
-                            </div>
-
-                            <p class="text-gray-400 mb-8 max-w-md mx-auto">
-                                这颗胶囊被时间封印着。在 ${m.unlock_time ? m.unlock_time.slice(0, 16).replace('T', ' ') : ''} 之前，
-                                任何人（包括创建者）都无法查看其中的内容。
-                            </p>
-
-                            <div class="mb-4 text-sm text-gray-500">距离解锁还有</div>
-                            <div id="countdown-display"></div>
-
-                            <div class="mt-12 text-xs text-gray-600">
-                                <p>By ${m.author} · 创建于 ${m.created_at}</p>
-                            </div>
-                        </div>
-                    `;
-
-                    if (m.unlock_time) {
-                        startCountdown(m.unlock_time);
+                        if (m.unlock_time) {
+                            startCountdown(m.unlock_time);
+                        }
+                        return;
                     }
+                }
+
+                if (m.geo_locked) {
+                    renderGeoLocked(m);
+                    return;
+                }
+
+                if (m.group_locked) {
+                    renderGroupLocked(m);
                     return;
                 }
 
