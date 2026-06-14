@@ -276,19 +276,31 @@ class Memory(db.Model):
             return True, None, None
         if user_id is None:
             return False, '需要登录后才能参与联合解锁', None
-        session = UnlockSession.query.filter_by(
-            memory_id=self.id, status='active'
-        ).order_by(UnlockSession.created_at.desc()).first()
+
+        session = UnlockSession.query.filter(
+            UnlockSession.memory_id == self.id,
+            UnlockSession.status.in_(['active', 'unlocked'])
+        ).order_by(
+            db.case(
+                (UnlockSession.status == 'active', 1),
+                (UnlockSession.status == 'unlocked', 2)
+            ),
+            UnlockSession.created_at.desc()
+        ).first()
+
         if session and session.is_unlocked():
             participant = UnlockParticipant.query.filter_by(
                 session_id=session.id, user_id=user_id
             ).first()
             if participant:
                 return True, None, session
+            if session.status == 'unlocked':
+                return False, '本轮联合解锁已完成，但您未参与，请发起新一轮解锁', session
+
         current_count = 0
         if session:
             current_count = session.current_count
-        if not session:
+        if not session or (session.status == 'unlocked' and not self.has_active_session()):
             return False, '尚未有人发起联合解锁，请先发起解锁', session
         if session.current_count >= self.group_unlock_count:
             participant = UnlockParticipant.query.filter_by(
@@ -304,6 +316,11 @@ class Memory(db.Model):
             return False, f'您已参与本轮解锁，还需 {self.group_unlock_count - current_count} 人参与', session
         return False, f'还需 {self.group_unlock_count - current_count} 人参与解锁', session
 
+    def has_active_session(self):
+        return UnlockSession.query.filter_by(
+            memory_id=self.id, status='active'
+        ).first() is not None
+
     def can_view(self, user=None, user_lat=None, user_lon=None, skip_geo=False, skip_group=False):
         if self.visibility == VISIBILITY_PUBLIC:
             return True
@@ -318,7 +335,7 @@ class Memory(db.Model):
             if self.has_group_lock():
                 participant = UnlockParticipant.query.join(UnlockSession).filter(
                     UnlockSession.memory_id == self.id,
-                    UnlockSession.status == 'active',
+                    UnlockSession.status.in_(['active', 'unlocked']),
                     UnlockParticipant.user_id == user.id
                 ).first()
                 if participant:

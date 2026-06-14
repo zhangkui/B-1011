@@ -552,8 +552,16 @@
                         unlockLinkInput.value = data.session.unlock_link;
                         shareSection.classList.remove('hidden');
                     }
-                    
-                    setTimeout(() => loadMemory(), 500);
+
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 已发起解锁';
+
+                    const progressBar = container.querySelector('.h-3 > div');
+                    const countSpan = container.querySelector('.text-cyber-neon.font-bold');
+                    if (progressBar && countSpan && data.session) {
+                        progressBar.style.width = `${(data.session.current_count / data.session.required_count) * 100}%`;
+                        countSpan.textContent = `${data.session.current_count} / ${data.session.required_count} 人`;
+                    }
                 } else {
                     statusEl.textContent = data.message || '发起解锁失败';
                     statusEl.className = 'text-sm text-red-400';
@@ -598,7 +606,8 @@
                     statusEl.className = 'text-sm text-green-400';
                     
                     if (data.unlocked) {
-                        setTimeout(() => loadMemory(), 500);
+                        btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 解锁成功！';
+                        setTimeout(() => loadMemory(), 800);
                     } else {
                         const shareSection = document.getElementById('share-section');
                         const unlockLinkInput = document.getElementById('unlock-link');
@@ -606,7 +615,16 @@
                             unlockLinkInput.value = data.session.unlock_link;
                             shareSection.classList.remove('hidden');
                         }
-                        setTimeout(() => loadMemory(), 1000);
+
+                        btn.disabled = false;
+                        btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 已参与解锁';
+
+                        const progressBar = container.querySelector('.h-3 > div');
+                        const countSpan = container.querySelector('.text-cyber-neon.font-bold');
+                        if (progressBar && countSpan && data.session) {
+                            progressBar.style.width = `${(data.session.current_count / data.session.required_count) * 100}%`;
+                            countSpan.textContent = `${data.session.current_count} / ${data.session.required_count} 人`;
+                        }
                     }
                 } else {
                     statusEl.textContent = data.message || '参与解锁失败';
