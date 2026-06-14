@@ -49,6 +49,56 @@
             min-width: 70px;
             text-align: center;
         }
+        .action-btn {
+            transition: all 0.2s ease;
+            cursor: pointer;
+            user-select: none;
+        }
+        .action-btn:hover { transform: translateY(-1px); }
+        .action-btn.active {
+            background: linear-gradient(135deg, rgba(244, 114, 182, 0.2), rgba(56, 189, 248, 0.2));
+        }
+        .like-btn.active svg { fill: #f472b6; color: #f472b6; }
+        .favorite-btn.active svg { fill: #fbbf24; color: #fbbf24; }
+        .card-color-warm { background: linear-gradient(135deg, #7c2d12, #9a3412); }
+        .card-color-cool { background: linear-gradient(135deg, #0c4a6e, #075985); }
+        .card-color-rose { background: linear-gradient(135deg, #831843, #9f1239); }
+        .card-color-gold { background: linear-gradient(135deg, #713f12, #854d0e); }
+        .card-color-sky { background: linear-gradient(135deg, #0c4a6e, #0369a1); }
+        .card-color-earth { background: linear-gradient(135deg, #365314, #3f6212); }
+        .emoji-response { transition: transform 0.15s ease; }
+        .emoji-response:hover { transform: scale(1.3); }
+        .emoji-response.active {
+            background: rgba(56, 189, 248, 0.2);
+            border-radius: 8px;
+        }
+        .tab-btn { transition: all 0.2s ease; }
+        .tab-btn.active {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.3), rgba(244, 114, 182, 0.3));
+            color: #fff;
+        }
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+            z-index: 100; display: flex; align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .modal-overlay.visible { opacity: 1; pointer-events: auto; }
+        .modal-content {
+            transform: scale(0.95); transition: transform 0.3s ease;
+        }
+        .modal-overlay.visible .modal-content { transform: scale(1); }
+        .message-reply-form { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+        .message-reply-form.open { max-height: 200px; }
+        .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+        .scrollbar-thin::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+        .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+        .card-template-preview {
+            aspect-ratio: 4/5; border-radius: 12px; position: relative;
+            overflow: hidden; cursor: pointer; transition: transform 0.2s ease;
+            border: 2px solid transparent;
+        }
+        .card-template-preview:hover { transform: translateY(-2px); }
+        .card-template-preview.selected { border-color: #38bdf8; box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -118,13 +168,199 @@
                 <div class="glass rounded-2xl p-6">
                     <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
                         <svg class="w-5 h-5 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
-                        留言板
+                        协作留言
                     </h3>
                     <div id="comments-list" class="space-y-3 mb-4 max-h-64 overflow-y-auto"></div>
                     <div id="comment-form" class="hidden">
                         <div class="flex gap-2">
                             <input id="comment-input" type="text" maxlength="500" placeholder="写下你的留言..." class="flex-1 bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light">
                             <button onclick="submitComment()" class="bg-cyber-neon text-black px-4 py-2 rounded-lg text-sm font-bold hover:bg-pink-400 transition">发送</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="interactive-section" class="mt-8 hidden">
+                <div class="glass rounded-2xl p-6">
+                    <div class="flex items-center gap-2 mb-6 border-b border-gray-700/50 pb-3 overflow-x-auto">
+                        <button onclick="switchTab('messages')" id="tab-messages" class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap">
+                            访客留言 <span id="msg-count-badge" class="ml-1 text-xs opacity-70">(0)</span>
+                        </button>
+                        <button onclick="switchTab('blessing')" id="tab-blessing" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap">
+                            祝福卡片 <span id="card-count-badge" class="ml-1 text-xs opacity-70">(0)</span>
+                        </button>
+                    </div>
+
+                    <div id="tab-content-messages">
+                        <div id="messages-list" class="space-y-4 mb-6 max-h-96 overflow-y-auto scrollbar-thin"></div>
+                        <div id="message-form-area" class="border-t border-gray-700/50 pt-4">
+                            <div id="message-form" class="space-y-3">
+                                <div class="flex items-center gap-3 flex-wrap">
+                                    <input id="msg-name" type="text" maxlength="50" placeholder="你的昵称（留空则匿名）" class="flex-1 min-w-40 bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light">
+                                    <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                                        <input type="checkbox" id="msg-anonymous" class="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyber-light focus:ring-cyber-light">
+                                        匿名留言
+                                    </label>
+                                </div>
+                                <textarea id="msg-content" maxlength="1000" rows="3" placeholder="写下你想说的话..." class="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light resize-none"></textarea>
+                                <div class="flex items-center justify-between flex-wrap gap-2">
+                                    <div class="text-xs text-gray-500">
+                                        <span id="msg-char-count">0</span>/1000 字
+                                    </div>
+                                    <button onclick="submitGuestMessage()" class="bg-cyber-neon text-black px-5 py-2 rounded-lg text-sm font-bold hover:bg-pink-400 transition flex items-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                                        发送留言
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="message-access-denied" class="hidden text-center py-6">
+                                <svg class="w-12 h-12 mx-auto text-gray-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                                <p id="access-denied-msg" class="text-gray-500 text-sm">解锁后即可留言</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="tab-content-blessing" class="hidden">
+                        <div id="blessing-cards-list" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 max-h-96 overflow-y-auto scrollbar-thin"></div>
+                        <div class="border-t border-gray-700/50 pt-4">
+                            <button onclick="openBlessingModal()" class="w-full bg-gradient-to-r from-cyber-light to-cyber-neon text-cyber-dark px-5 py-3 rounded-xl text-sm font-bold hover:opacity-90 transition flex items-center justify-center gap-2">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                                发送祝福卡片
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="blessing-modal" class="modal-overlay">
+                <div class="modal-content glass rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-xl font-bold gradient-text">发送祝福卡片</h3>
+                        <button onclick="closeBlessingModal()" class="text-gray-400 hover:text-white transition">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                    <div class="space-y-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">选择样式</label>
+                            <div id="card-template-select" class="grid grid-cols-3 sm:grid-cols-6 gap-3"></div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">选择色调</label>
+                            <div id="card-color-select" class="flex flex-wrap gap-2"></div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">你的昵称</label>
+                                <input id="card-sender" type="text" maxlength="50" placeholder="留空则匿名" class="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">送给（可选）</label>
+                                <input id="card-recipient" type="text" maxlength="50" placeholder="收件人昵称" class="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light">
+                            </div>
+                        </div>
+                        <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                            <input type="checkbox" id="card-anonymous" class="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyber-light focus:ring-cyber-light">
+                            匿名发送
+                        </label>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">祝福内容</label>
+                            <textarea id="card-content" maxlength="1000" rows="4" placeholder="写下你的祝福语..." class="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-white text-sm focus:outline-none focus:border-cyber-light resize-none"></textarea>
+                            <div class="text-xs text-gray-500 text-right mt-1">
+                                <span id="card-char-count">0</span>/1000 字
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-3 pt-2">
+                            <button onclick="closeBlessingModal()" class="px-5 py-2 rounded-lg border border-gray-600 text-gray-300 hover:border-gray-500 hover:text-white transition text-sm">取消</button>
+                            <button onclick="submitBlessingCard()" id="card-submit-btn" class="bg-cyber-neon text-black px-5 py-2 rounded-lg text-sm font-bold hover:bg-pink-400 transition">发送祝福</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="share-modal" class="modal-overlay">
+                <div class="modal-content glass rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-xl font-bold gradient-text">分享记忆</h3>
+                        <button onclick="closeShareModal()" class="text-gray-400 hover:text-white transition">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                    <div class="space-y-6">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
+                                短链接
+                            </h4>
+                            <div id="short-link-area" class="space-y-3">
+                                <div class="flex gap-2">
+                                    <input type="text" id="short-link-input" readonly class="flex-1 bg-gray-800 border border-gray-700 rounded-lg py-2 px-4 text-sm text-cyber-light focus:outline-none" placeholder="点击下方按钮生成短链接">
+                                    <button onclick="copyShortLink()" id="copy-short-btn" class="bg-gray-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-600 transition disabled:opacity-50" disabled>
+                                        复制
+                                    </button>
+                                </div>
+                                <div class="flex gap-2 flex-wrap">
+                                    <input type="text" id="custom-short-code" maxlength="12" placeholder="自定义短码（可选，4-12字符）" class="flex-1 min-w-40 bg-gray-800 border border-gray-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyber-light">
+                                    <button onclick="generateShortLink()" class="bg-cyber-light text-cyber-dark px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-400 transition whitespace-nowrap">
+                                        生成短链接
+                                    </button>
+                                </div>
+                                <div id="short-link-info" class="hidden text-xs text-gray-500 bg-gray-800/50 rounded-lg p-3">
+                                    <div class="flex items-center justify-between">
+                                        <span>点击次数</span>
+                                        <span id="short-link-clicks" class="text-cyber-light font-semibold">0</span>
+                                    </div>
+                                    <div class="flex items-center justify-between mt-1">
+                                        <span>创建时间</span>
+                                        <span id="short-link-created" class="text-gray-400">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-gray-700/50 pt-5">
+                            <h4 class="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-cyber-neon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                分享海报
+                            </h4>
+                            <div class="space-y-3">
+                                <div class="flex flex-wrap gap-2">
+                                    <span class="text-xs text-gray-400 self-center mr-1">风格：</span>
+                                    <button onclick="selectPosterStyle('elegant')" data-style="elegant" class="poster-style-btn px-3 py-1 rounded-full text-xs border border-cyber-light/50 bg-cyber-light/20 text-cyber-light">优雅</button>
+                                    <button onclick="selectPosterStyle('warm')" data-style="warm" class="poster-style-btn px-3 py-1 rounded-full text-xs border border-gray-600 text-gray-400 hover:border-orange-400/50 hover:text-orange-400">温暖</button>
+                                    <button onclick="selectPosterStyle('romantic')" data-style="romantic" class="poster-style-btn px-3 py-1 rounded-full text-xs border border-gray-600 text-gray-400 hover:border-pink-400/50 hover:text-pink-400">浪漫</button>
+                                    <button onclick="selectPosterStyle('memorial')" data-style="memorial" class="poster-style-btn px-3 py-1 rounded-full text-xs border border-gray-600 text-gray-400 hover:border-yellow-400/50 hover:text-yellow-400">纪念</button>
+                                </div>
+                                <div class="flex gap-2 flex-wrap">
+                                    <span class="text-xs text-gray-400 self-center mr-1">尺寸：</span>
+                                    <button onclick="selectPosterWidth(750)" data-width="750" class="poster-width-btn px-3 py-1 rounded-full text-xs border border-cyber-neon/50 bg-cyber-neon/20 text-cyber-neon">朋友圈 (750)</button>
+                                    <button onclick="selectPosterWidth(1080)" data-width="1080" class="poster-width-btn px-3 py-1 rounded-full text-xs border border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-300">高清 (1080)</button>
+                                    <button onclick="selectPosterWidth(375)" data-width="375" class="poster-width-btn px-3 py-1 rounded-full text-xs border border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-300">手机 (375)</button>
+                                </div>
+                                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                                    <input type="checkbox" id="poster-include-qr" checked class="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyber-light focus:ring-cyber-light">
+                                    包含二维码
+                                </label>
+                                <button onclick="generatePoster()" id="gen-poster-btn" class="w-full bg-gradient-to-r from-cyber-light to-cyber-neon text-cyber-dark px-4 py-2.5 rounded-xl text-sm font-bold hover:opacity-90 transition flex items-center justify-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                    生成分享海报
+                                </button>
+                                <div id="poster-preview" class="hidden">
+                                    <div class="border border-gray-700 rounded-xl overflow-hidden bg-gray-900">
+                                        <img id="poster-image" src="" alt="分享海报" class="w-full h-auto">
+                                    </div>
+                                    <div class="flex gap-2 mt-3">
+                                        <a id="poster-download" href="#" download class="flex-1 bg-cyber-light text-cyber-dark px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-400 transition text-center flex items-center justify-center gap-1">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                            下载海报
+                                        </a>
+                                        <button onclick="copyPosterImage()" class="bg-gray-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-600 transition flex items-center gap-1">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
+                                            复制
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1012,9 +1248,25 @@
                         ${m.text_content ? `<div class="prose prose-invert prose-lg max-w-none text-gray-300 leading-relaxed whitespace-pre-wrap">${m.text_content}</div>` : ''}
                     </div>
 
-                    <div class="bg-gray-900/50 p-6 flex justify-between items-center">
-                         <div class="text-xs text-gray-500 font-mono">ID: ${m.id}</div>
-                         <a href="/design.html?id=${m.id}" class="text-cyber-light text-sm hover:underline">设计二维码 &rarr;</a>
+                    <div class="bg-gray-900/50 p-6 border-t border-gray-700/50">
+                        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+                            <div class="text-xs text-gray-500 font-mono">ID: ${m.id}</div>
+                            <a href="/design.html?id=${m.id}" class="text-cyber-light text-sm hover:underline">设计二维码 &rarr;</a>
+                        </div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button onclick="toggleLike()" id="like-btn" class="action-btn like-btn flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-700 hover:border-pink-500/50 text-sm ${m.viewer_liked ? 'active' : ''}">
+                                <svg class="w-5 h-5 ${m.viewer_liked ? 'text-pink-500' : 'text-gray-400'}" fill="${m.viewer_liked ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path></svg>
+                                <span id="like-count" class="${m.viewer_liked ? 'text-pink-400 font-semibold' : 'text-gray-400'}">${m.likes_count || 0}</span>
+                            </button>
+                            <button onclick="toggleFavorite()" id="favorite-btn" class="action-btn favorite-btn flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-700 hover:border-yellow-500/50 text-sm ${m.viewer_favorited ? 'active' : ''}">
+                                <svg class="w-5 h-5 ${m.viewer_favorited ? 'text-yellow-400' : 'text-gray-400'}" fill="${m.viewer_favorited ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path></svg>
+                                <span id="favorite-count" class="${m.viewer_favorited ? 'text-yellow-400 font-semibold' : 'text-gray-400'}">${m.favorites_count || 0}</span>
+                            </button>
+                            <button onclick="openShareModal()" class="action-btn flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-700 hover:border-cyber-light/50 text-sm">
+                                <svg class="w-5 h-5 text-cyber-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
+                                <span class="text-cyber-light">分享</span>
+                            </button>
+                        </div>
                     </div>
                 `;
 
@@ -1030,6 +1282,817 @@
                 container.innerHTML = '<div class="p-12 text-center text-red-500">加载失败，请检查网络连接</div>';
             }
         }
+
+        let currentPosterStyle = 'elegant';
+        let currentPosterWidth = 750;
+        let selectedCardTemplate = 'classic';
+        let selectedCardColor = 'warm';
+        let canSendMessages = false;
+        let responseSummary = {};
+        const EMOJI_OPTIONS = ['❤️', '😭', '😊', '🙏', '🌹', '🔥', '✨', '💪', '🎉', '🤗'];
+
+        async function toggleLike() {
+            if (!memoryId) return;
+            const btn = document.getElementById('like-btn');
+            const countEl = document.getElementById('like-count');
+            if (!btn || !countEl) return;
+
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/like`, { method: 'POST' });
+                if (res.status === 401) {
+                    const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+                    window.location.href = `/login.html?redirect=${currentUrl}`;
+                    return;
+                }
+                const data = await res.json();
+                if (data.success) {
+                    if (data.liked) {
+                        btn.classList.add('active');
+                        btn.querySelector('svg').setAttribute('fill', 'currentColor');
+                        btn.querySelector('svg').classList.remove('text-gray-400');
+                        btn.querySelector('svg').classList.add('text-pink-500');
+                        countEl.classList.add('text-pink-400', 'font-semibold');
+                        countEl.classList.remove('text-gray-400');
+                    } else {
+                        btn.classList.remove('active');
+                        btn.querySelector('svg').setAttribute('fill', 'none');
+                        btn.querySelector('svg').classList.add('text-gray-400');
+                        btn.querySelector('svg').classList.remove('text-pink-500');
+                        countEl.classList.remove('text-pink-400', 'font-semibold');
+                        countEl.classList.add('text-gray-400');
+                    }
+                    countEl.textContent = data.likes_count;
+                    showToast(data.liked ? '已点赞' : '已取消点赞');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('操作失败', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function toggleFavorite() {
+            if (!memoryId) return;
+            const btn = document.getElementById('favorite-btn');
+            const countEl = document.getElementById('favorite-count');
+            if (!btn || !countEl) return;
+
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/favorite`, { method: 'POST' });
+                if (res.status === 401) {
+                    const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+                    window.location.href = `/login.html?redirect=${currentUrl}`;
+                    return;
+                }
+                if (res.status === 403) {
+                    showToast('您没有权限收藏此记忆', 'error');
+                    return;
+                }
+                const data = await res.json();
+                if (data.success) {
+                    if (data.favorited) {
+                        btn.classList.add('active');
+                        btn.querySelector('svg').setAttribute('fill', 'currentColor');
+                        btn.querySelector('svg').classList.remove('text-gray-400');
+                        btn.querySelector('svg').classList.add('text-yellow-400');
+                        countEl.classList.add('text-yellow-400', 'font-semibold');
+                        countEl.classList.remove('text-gray-400');
+                    } else {
+                        btn.classList.remove('active');
+                        btn.querySelector('svg').setAttribute('fill', 'none');
+                        btn.querySelector('svg').classList.add('text-gray-400');
+                        btn.querySelector('svg').classList.remove('text-yellow-400');
+                        countEl.classList.remove('text-yellow-400', 'font-semibold');
+                        countEl.classList.add('text-gray-400');
+                    }
+                    countEl.textContent = data.favorites_count;
+                    showToast(data.favorited ? '已收藏' : '已取消收藏');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('操作失败', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function switchTab(tab) {
+            const tabs = ['messages', 'blessing'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`tab-${t}`);
+                const content = document.getElementById(`tab-content-${t}`);
+                if (t === tab) {
+                    btn.classList.add('active');
+                    content.classList.remove('hidden');
+                } else {
+                    btn.classList.remove('active');
+                    content.classList.add('hidden');
+                }
+            });
+        }
+
+        async function loadInteractiveSection() {
+            if (!memoryId) return;
+            if (!memoryData || !memoryData.can_view) return;
+
+            const section = document.getElementById('interactive-section');
+            if (!section) return;
+            section.classList.remove('hidden');
+
+            document.getElementById('msg-count-badge').textContent = `(${memoryData.messages_count || 0})`;
+            document.getElementById('card-count-badge').textContent = `(${memoryData.blessing_cards_count || 0})`;
+
+            const user_lat = (typeof currentLat !== 'undefined') ? currentLat : null;
+            const user_lon = (typeof currentLon !== 'undefined') ? currentLon : null;
+            const checkAccessBody = {};
+            if (user_lat) checkAccessBody.lat = user_lat;
+            if (user_lon) checkAccessBody.lon = user_lon;
+
+            try {
+                const testRes = await fetch(`/api/memories/${memoryId}/guest-messages?per_page=1`, {
+                    method: 'POST' in {} ? 'GET' : 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: Object.keys(checkAccessBody).length ? JSON.stringify(checkAccessBody) : undefined
+                });
+            } catch (e) {}
+
+            const m = memoryData;
+            const isLocked = m.is_locked || m.geo_locked || m.group_locked;
+            canSendMessages = !isLocked && (
+                m.visibility === 'public' ||
+                m.author_id === (current_user_id || null) ||
+                myRole !== null
+            );
+
+            if (m.visibility === 'public' && !isLocked) {
+                canSendMessages = true;
+            }
+
+            const msgForm = document.getElementById('message-form');
+            const msgDenied = document.getElementById('message-access-denied');
+            if (canSendMessages) {
+                msgForm.classList.remove('hidden');
+                msgDenied.classList.add('hidden');
+                const authStatus = await fetch('/api/auth/status');
+                const authData = await authStatus.json();
+                if (authData.authenticated) {
+                    document.getElementById('msg-name').value = authData.username;
+                }
+            } else {
+                msgForm.classList.add('hidden');
+                msgDenied.classList.remove('hidden');
+                let reason = '解锁后即可留言';
+                if (m.is_locked) reason = '该记忆已锁定，解锁后可留言';
+                else if (m.geo_locked) reason = m.geo_message || '需要前往指定位置才能留言';
+                else if (m.group_locked) reason = '需要完成多人联合解锁后才能留言';
+                else if (m.visibility === 'private') reason = '请先登录并获取访问权限后才能留言';
+                document.getElementById('access-denied-msg').textContent = reason;
+            }
+
+            loadGuestMessages();
+            loadBlessingCards();
+            loadAnonymousResponses();
+        }
+
+        async function loadGuestMessages(page = 1) {
+            if (!memoryId) return;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/guest-messages?page=${page}&per_page=20`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.success) {
+                    renderGuestMessages(data.messages || []);
+                }
+            } catch (err) {
+                console.error('Failed to load messages:', err);
+            }
+        }
+
+        function renderGuestMessages(messages) {
+            const list = document.getElementById('messages-list');
+            if (!list) return;
+            if (messages.length === 0) {
+                list.innerHTML = '<div class="text-center py-10 text-gray-500 text-sm"><svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>暂无访客留言，成为第一个留言的人吧</div>';
+                return;
+            }
+            list.innerHTML = messages.map(msg => {
+                const repliesHtml = (msg.replies || []).map(r => `
+                    <div class="ml-10 mt-2 p-3 bg-gray-800/40 rounded-lg border-l-2 border-cyber-light/50">
+                        <div class="flex items-start gap-2">
+                            <div class="w-6 h-6 rounded-full bg-cyber-light/20 flex items-center justify-center text-xs font-bold text-cyber-light shrink-0">${(r.guest_name || '?')[0].toUpperCase()}</div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-xs font-medium text-gray-300">${r.guest_name}</span>
+                                    ${r.is_anonymous ? '<span class="text-[10px] px-1 rounded bg-gray-700 text-gray-400">匿名</span>' : ''}
+                                    <span class="text-[10px] text-gray-600">${r.created_at}</span>
+                                </div>
+                                <p class="text-xs text-gray-400 break-words">${r.content}</p>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+
+                const emojiSummary = responseSummary[`message_${msg.id}`] || {};
+                const emojiBar = Object.entries(emojiSummary).map(([emoji, count]) => `
+                    <button onclick="sendEmojiResponse('message', ${msg.id}, '${emoji}')" class="emoji-response text-sm px-2 py-0.5 rounded-full bg-gray-800/50 hover:bg-gray-700/50 transition">
+                        ${emoji} <span class="text-xs text-gray-400">${count}</span>
+                    </button>
+                `).join('');
+
+                const availableEmojis = EMOJI_OPTIONS.slice(0, 6).map(e => `
+                    <button onclick="sendEmojiResponse('message', ${msg.id}, '${e}')" class="emoji-response text-sm px-1.5 py-0.5 rounded transition hover:scale-125" title="${e}">${e}</button>
+                `).join('');
+
+                return `
+                    <div class="flex items-start gap-3 p-4 bg-gray-800/30 rounded-xl border border-gray-700/30">
+                        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-cyber-neon/30 to-cyber-light/30 flex items-center justify-center text-sm font-bold text-cyber-neon shrink-0 border border-cyber-neon/30">${(msg.guest_name || '?')[0].toUpperCase()}</div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-2 flex-wrap">
+                                <span class="text-sm font-medium text-gray-200">${msg.guest_name}</span>
+                                ${msg.is_anonymous ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-700/70 text-gray-400 border border-gray-600/50">匿名</span>' : ''}
+                                ${msg.message_type === 'blessing' ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyber-neon/20 text-cyber-neon border border-cyber-neon/30">💝 祝福</span>' : ''}
+                                ${msg.message_type === 'memory' ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyber-light/20 text-cyber-light border border-cyber-light/30">✨ 回忆</span>' : ''}
+                                <span class="text-xs text-gray-600 ml-auto">${msg.created_at}</span>
+                            </div>
+                            <p class="text-sm text-gray-300 break-words leading-relaxed">${msg.content}</p>
+                            <div class="mt-3 flex items-center gap-2 flex-wrap">
+                                ${emojiBar}
+                                <div class="flex items-center gap-1 ml-1 border-l border-gray-700/50 pl-2">
+                                    ${availableEmojis}
+                                </div>
+                                ${canSendMessages ? `
+                                    <button onclick="toggleReplyForm(${msg.id})" class="ml-auto text-xs text-gray-500 hover:text-cyber-light transition flex items-center gap-1">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6V4a1 1 0 011-1h12a1 1 0 011 1v6"></path></svg>
+                                        回复
+                                    </button>
+                                ` : ''}
+                            </div>
+                            ${repliesHtml}
+                            <div id="reply-form-${msg.id}" class="message-reply-form">
+                                <div class="ml-10 mt-2 flex gap-2">
+                                    <input id="reply-input-${msg.id}" type="text" maxlength="500" placeholder="写下你的回复..." class="flex-1 bg-gray-800 border border-gray-700 rounded-lg py-1.5 px-3 text-sm focus:outline-none focus:border-cyber-light text-white">
+                                    <button onclick="submitReply(${msg.id})" class="bg-cyber-neon/80 text-black px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-cyber-neon transition whitespace-nowrap">发送</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function submitGuestMessage() {
+            if (!memoryId || !canSendMessages) return;
+
+            const nameInput = document.getElementById('msg-name');
+            const contentInput = document.getElementById('msg-content');
+            const anonCheckbox = document.getElementById('msg-anonymous');
+            if (!nameInput || !contentInput) return;
+
+            const content = contentInput.value.trim();
+            const guestName = nameInput.value.trim();
+            const isAnonymous = anonCheckbox.checked;
+
+            if (!content) {
+                showToast('请输入留言内容', 'error');
+                return;
+            }
+            if (!isAnonymous && !guestName) {
+                showToast('请填写昵称或选择匿名留言', 'error');
+                return;
+            }
+
+            const body = {
+                content,
+                guest_name: guestName,
+                is_anonymous: isAnonymous,
+                message_type: 'message'
+            };
+            if (typeof currentLat !== 'undefined' && currentLat) body.lat = currentLat;
+            if (typeof currentLon !== 'undefined' && currentLon) body.lon = currentLon;
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/guest-messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    contentInput.value = '';
+                    document.getElementById('msg-char-count').textContent = '0';
+                    if (memoryData) memoryData.messages_count = (memoryData.messages_count || 0) + 1;
+                    document.getElementById('msg-count-badge').textContent = `(${memoryData.messages_count})`;
+                    showToast('留言发送成功');
+                    loadGuestMessages();
+                    loadAnonymousResponses();
+                } else {
+                    showToast(data.message || '留言失败', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('网络错误', 'error');
+            }
+        }
+
+        function toggleReplyForm(msgId) {
+            const form = document.getElementById(`reply-form-${msgId}`);
+            if (form) form.classList.toggle('open');
+        }
+
+        async function submitReply(parentId) {
+            if (!memoryId || !canSendMessages) return;
+
+            const input = document.getElementById(`reply-input-${parentId}`);
+            if (!input) return;
+            const content = input.value.trim();
+            if (!content) return;
+
+            const nameInput = document.getElementById('msg-name');
+            const anonCheckbox = document.getElementById('msg-anonymous');
+            const guestName = nameInput ? nameInput.value.trim() : '';
+            const isAnonymous = anonCheckbox ? anonCheckbox.checked : true;
+
+            const body = {
+                content,
+                guest_name: guestName,
+                is_anonymous: isAnonymous || !guestName,
+                parent_id: parentId,
+                message_type: 'message'
+            };
+            if (typeof currentLat !== 'undefined' && currentLat) body.lat = currentLat;
+            if (typeof currentLon !== 'undefined' && currentLon) body.lon = currentLon;
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/guest-messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    input.value = '';
+                    toggleReplyForm(parentId);
+                    showToast('回复成功');
+                    loadGuestMessages();
+                } else {
+                    showToast(data.message || '回复失败', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function sendEmojiResponse(targetType, targetId, emoji) {
+            if (!memoryId) return;
+            const body = {
+                target_type: targetType,
+                target_id: targetId,
+                response_type: 'emoji',
+                content: emoji
+            };
+            if (typeof currentLat !== 'undefined' && currentLat) body.lat = currentLat;
+            if (typeof currentLon !== 'undefined' && currentLon) body.lon = currentLon;
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/anonymous-responses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    loadAnonymousResponses();
+                    setTimeout(() => {
+                        if (targetType === 'message') loadGuestMessages();
+                        else if (targetType === 'card') loadBlessingCards();
+                    }, 100);
+                }
+            } catch (err) {
+                    console.error(err);
+                }
+        }
+
+        async function loadAnonymousResponses() {
+            if (!memoryId) return;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/anonymous-responses`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success) {
+                        responseSummary = data.summary || {};
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function initBlessingCardModal() {
+            const templateSelect = document.getElementById('card-template-select');
+            const colorSelect = document.getElementById('card-color-select');
+            const templates = [
+                { id: 'classic', name: '经典', icon: '📜' },
+                { id: 'elegant', name: '优雅', icon: '🌿' },
+                { id: 'warm', name: '温馨', icon: '🏠' },
+                { id: 'romantic', name: '浪漫', icon: '💝' },
+                { id: 'festive', name: '喜庆', icon: '🎊' },
+                { id: 'memorial', name: '纪念', icon: '🕯️' }
+            ];
+            const colors = [
+                { id: 'warm', name: '暖橙', gradient: 'from-orange-900 to-amber-800' },
+                { id: 'cool', name: '湖蓝', gradient: 'from-sky-900 to-blue-800' },
+                { id: 'rose', name: '玫瑰', gradient: 'from-pink-900 to-rose-800' },
+                { id: 'gold', name: '金箔', gradient: 'from-yellow-900 to-amber-700' },
+                { id: 'sky', name: '天青', gradient: 'from-indigo-900 to-sky-800' },
+                { id: 'earth', name: '大地', gradient: 'from-green-900 to-lime-800' }
+            ];
+            if (templateSelect) {
+                templateSelect.innerHTML = templates.map(t => `
+                    <div onclick="selectCardTemplate('${t.id}')" data-template="${t.id}" class="card-template-preview ${selectedCardTemplate === t.id ? 'selected' : ''} bg-gradient-to-br from-gray-800 to-gray-900 flex flex-col items-center justify-center text-center p-2">
+                        <div class="text-2xl mb-1">${t.icon}</div>
+                        <div class="text-[10px] text-gray-400">${t.name}</div>
+                    </div>
+                `).join('');
+            }
+            if (colorSelect) {
+                colorSelect.innerHTML = colors.map(c => `
+                    <button onclick="selectCardColor('${c.id}')" data-color="${c.id}" class="w-10 h-10 rounded-full bg-gradient-to-br ${c.gradient} ${selectedCardColor === c.id ? 'ring-2 ring-cyber-light ring-offset-2 ring-offset-gray-900' : ''}" title="${c.name}"></button>
+                `).join('');
+            }
+        }
+
+        function selectCardTemplate(id) {
+            selectedCardTemplate = id;
+            document.querySelectorAll('[data-template]').forEach(el => {
+                el.classList.toggle('selected', el.dataset.template === id);
+            });
+        }
+
+        function selectCardColor(id) {
+            selectedCardColor = id;
+            document.querySelectorAll('[data-color]').forEach(el => {
+                const isSelected = el.dataset.color === id;
+                el.classList.toggle('ring-2', isSelected);
+                el.classList.toggle('ring-cyber-light', isSelected);
+                el.classList.toggle('ring-offset-2', isSelected);
+                el.classList.toggle('ring-offset-gray-900', isSelected);
+            });
+        }
+
+        function openBlessingModal() {
+            if (!canSendMessages) {
+                showToast('您没有权限发送祝福卡片', 'error');
+                return;
+            }
+            initBlessingCardModal();
+            document.getElementById('blessing-modal').classList.add('visible');
+            const authStatus = fetch('/api/auth/status').then(r => r.json()).then(d => {
+                if (d.authenticated && document.getElementById('card-sender')) {
+                    document.getElementById('card-sender').value = d.username;
+                }
+            }).catch(() => {});
+        }
+
+        function closeBlessingModal() {
+            document.getElementById('blessing-modal').classList.remove('visible');
+        }
+
+        async function submitBlessingCard() {
+            if (!memoryId || !canSendMessages) return;
+
+            const senderInput = document.getElementById('card-sender');
+            const recipientInput = document.getElementById('card-recipient');
+            const contentInput = document.getElementById('card-content');
+            const anonCheckbox = document.getElementById('card-anonymous');
+            const submitBtn = document.getElementById('card-submit-btn');
+
+            const sender = senderInput.value.trim();
+            const recipient = recipientInput.value.trim();
+            const content = contentInput.value.trim();
+            const isAnonymous = anonCheckbox.checked;
+
+            if (!content) {
+                showToast('请输入祝福内容', 'error');
+                return;
+            }
+            if (!isAnonymous && !sender) {
+                showToast('请填写昵称或选择匿名发送', 'error');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '发送中...';
+
+            const body = {
+                content,
+                sender_name: sender,
+                recipient_name: recipient || null,
+                card_template: selectedCardTemplate,
+                card_color: selectedCardColor,
+                is_anonymous: isAnonymous || !sender
+            };
+            if (typeof currentLat !== 'undefined' && currentLat) body.lat = currentLat;
+            if (typeof currentLon !== 'undefined' && currentLon) body.lon = currentLon;
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/blessing-cards`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    senderInput.value = '';
+                    recipientInput.value = '';
+                    contentInput.value = '';
+                    anonCheckbox.checked = false;
+                    document.getElementById('card-char-count').textContent = '0';
+                    closeBlessingModal();
+                    if (memoryData) memoryData.blessing_cards_count = (memoryData.blessing_cards_count || 0) + 1;
+                    document.getElementById('card-count-badge').textContent = `(${memoryData.blessing_cards_count})`;
+                    showToast('祝福卡片发送成功');
+                    loadBlessingCards();
+                } else {
+                    showToast(data.message || '发送失败', 'error');
+                }
+            } catch (err) {
+                    console.error(err);
+                    showToast('网络错误', 'error');
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '发送祝福';
+                }
+        }
+
+        async function loadBlessingCards(page = 1) {
+            if (!memoryId) return;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/blessing-cards?page=${page}&per_page=12`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.success) {
+                    renderBlessingCards(data.cards || []);
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function renderBlessingCards(cards) {
+            const list = document.getElementById('blessing-cards-list');
+            if (!list) return;
+            if (cards.length === 0) {
+                list.innerHTML = '<div class="col-span-full text-center py-10 text-gray-500 text-sm"><svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9.414M3 7l9-4 9 4M16 11H8"></path></svg>暂无祝福卡片，送出你的第一份祝福吧</div>';
+                return;
+            }
+            list.innerHTML = cards.map(card => {
+                const emojiSummary = responseSummary[`card_${card.id}`] || {};
+                const emojiBar = Object.entries(emojiSummary).map(([emoji, count]) => `
+                    <button onclick="sendEmojiResponse('card', ${card.id}, '${emoji}')" class="text-xs px-1.5 py-0.5 rounded-full bg-black/20 hover:bg-black/30 transition">
+                        ${emoji} <span class="opacity-70">${count}</span>
+                    </button>
+                `).join('');
+                const emojis = EMOJI_OPTIONS.slice(0, 5).map(e => `
+                    <button onclick="sendEmojiResponse('card', ${card.id}, '${e}')" class="emoji-response text-xs px-1 transition hover:scale-125" title="${e}">${e}</button>
+                `).join('');
+                return `
+                    <div class="card-color-${card.card_color} rounded-xl p-5 shadow-xl border border-white/10 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10"></div>
+                        <div class="relative z-10">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-sm">${(card.sender_name || '?')[0].toUpperCase()}</div>
+                                    <div>
+                                        <div class="text-sm font-medium text-white/90">${card.sender_name}${card.is_anonymous ? ' <span class="text-[10px] text-white/50">(匿名)</span>' : ''}</div>
+                                        <div class="text-[10px] text-white/40">${card.created_at}</div>
+                                    </div>
+                                </div>
+                                ${card.recipient_name ? `<div class="text-xs text-white/60">致 <span class="text-white/80">${card.recipient_name}</span></div>' : ''}
+                            </div>
+                            <div class="my-4 text-white/90 text-sm leading-relaxed break-words whitespace-pre-wrap">${card.content}</div>
+                            <div class="flex items-center gap-1.5 flex-wrap mt-4 pt-3 border-t border-white/10">
+                                ${emojiBar}
+                                <div class="flex items-center gap-0.5 ml-auto">
+                                    ${emojis}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openShareModal() {
+            if (!memoryId) return;
+            document.getElementById('share-modal').classList.add('visible');
+            listExistingShortLinks();
+        }
+
+        function closeShareModal() {
+            document.getElementById('share-modal').classList.remove('visible');
+        }
+
+        async function generateShortLink() {
+            if (!memoryId) return;
+            const codeInput = document.getElementById('custom-short-code');
+            const customCode = codeInput ? codeInput.value.trim() : '';
+            const body = {};
+            if (customCode) body.custom_code = customCode;
+
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/short-link`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (res.status === 401) {
+                const currentUrl = encodeURIComponent(window.location.pathname + window.location.search);
+                window.location.href = `/login.html?redirect=${currentUrl}`;
+                return;
+            }
+            const data = await res.json();
+            if (data.success) {
+                const input = document.getElementById('short-link-input');
+                const copyBtn = document.getElementById('copy-short-btn');
+                const info = document.getElementById('short-link-info');
+                input.value = data.short_link.short_url;
+                copyBtn.disabled = false;
+                info.classList.remove('hidden');
+                document.getElementById('short-link-clicks').textContent = data.short_link.click_count || 0;
+                document.getElementById('short-link-created').textContent = data.short_link.created_at || '-';
+                showToast('短链接生成成功');
+            } else {
+                showToast(data.message || '生成失败', 'error');
+            }
+        }
+
+        async function listExistingShortLinks() {
+            if (!memoryId) return;
+            try {
+                const res = await fetch(`/api/memories/${memoryId}/short-links`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success && data.short_links && data.short_links.length > 0) {
+                        const latest = data.short_links[0];
+                        document.getElementById('short-link-input').value = latest.short_url;
+                        document.getElementById('copy-short-btn').disabled = false;
+                        document.getElementById('short-link-info').classList.remove('hidden');
+                        document.getElementById('short-link-clicks').textContent = latest.click_count || 0;
+                        document.getElementById('short-link-created').textContent = latest.created_at || '-';
+                    }
+                }
+            } catch (err) {}
+        }
+
+        function copyShortLink() {
+            const input = document.getElementById('short-link-input');
+            if (!input || !input.value) return;
+            input.select();
+            navigator.clipboard.writeText(input.value).then(() => {
+                showToast('短链接已复制');
+            }).catch(() => {
+                document.execCommand('copy');
+                showToast('短链接已复制');
+            });
+        }
+
+        function selectPosterStyle(style) {
+            currentPosterStyle = style;
+            const btnMap = {
+                'elegant': 'border-cyber-light/50 bg-cyber-light/20 text-cyber-light',
+                'warm': 'border-orange-400/50 bg-orange-400/20 text-orange-400',
+                'romantic': 'border-pink-400/50 bg-pink-400/20 text-pink-400',
+                'memorial': 'border-yellow-400/50 bg-yellow-400/20 text-yellow-400'
+            };
+            const hovMap = {
+                'elegant': 'hover:border-cyber-light/50 hover:text-cyber-light',
+                'warm': 'hover:border-orange-400/50 hover:text-orange-400',
+                'romantic': 'hover:border-pink-400/50 hover:text-pink-400',
+                'memorial': 'hover:border-yellow-400/50 hover:text-yellow-400'
+            };
+            document.querySelectorAll('.poster-style-btn').forEach(btn => {
+                const s = btn.dataset.style;
+                const isActive = s === style;
+                btn.className = 'poster-style-btn px-3 py-1 rounded-full text-xs border ';
+                if (isActive) {
+                    btn.className += btnMap[s] || btnMap['elegant'];
+                } else {
+                    btn.className += 'border-gray-600 text-gray-400 ' + (hovMap[s] || hovMap['elegant']);
+                }
+            });
+        }
+
+        function selectPosterWidth(width) {
+            currentPosterWidth = width;
+            const activeCls = 'border-cyber-neon/50 bg-cyber-neon/20 text-cyber-neon';
+            const inactiveCls = 'border-gray-600 text-gray-400';
+            document.querySelectorAll('.poster-width-btn').forEach(btn => {
+                const isActive = parseInt(btn.dataset.width) === parseInt(width);
+                btn.className = 'poster-width-btn px-3 py-1 rounded-full text-xs border ' + 
+                    (isActive ? activeCls : (inactiveCls + ' hover:border-gray-500 hover:text-gray-300'));
+            });
+        }
+
+        async function generatePoster() {
+            if (!memoryId) return;
+            const btn = document.getElementById('gen-poster-btn');
+            const includeQr = document.getElementById('poster-include-qr');
+            btn.disabled = true;
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 生成中...';
+
+            try {
+                const qrParam = includeQr && includeQr.checked ? 'true' : 'false';
+                const res = await fetch(`/api/memories/${memoryId}/share-poster?style=${currentPosterStyle}&width=${currentPosterWidth}&include_qr=${qrParam}`);
+                const data = await res.json();
+                if (data.success) {
+                    const preview = document.getElementById('poster-preview');
+                    const img = document.getElementById('poster-image');
+                    const download = document.getElementById('poster-download');
+                    preview.classList.remove('hidden');
+                    img.src = data.poster_url + '?t=' + Date.now();
+                    download.href = data.poster_url;
+                    download.download = `memory-poster-${memoryId.slice(0, 8)}.png`;
+                    showToast('海报生成成功');
+                } else {
+                    showToast(data.message || '生成失败', 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('网络错误', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+
+        async function copyPosterImage() {
+            const img = document.getElementById('poster-image');
+            if (!img || !img.src) return;
+            try {
+                const response = await fetch(img.src);
+                const blob = await response.blob();
+                await navigator.clipboard.write([
+                    new ClipboardItem({ [blob.type]: blob })
+                ]);
+                showToast('海报已复制到剪贴板');
+            } catch (err) {
+                showToast('复制失败，请右键保存图片', 'error');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const msgContent = document.getElementById('msg-content');
+            if (msgContent) {
+                msgContent.addEventListener('input', function() {
+                    document.getElementById('msg-char-count').textContent = this.value.length;
+                });
+            }
+            const cardContent = document.getElementById('card-content');
+            if (cardContent) {
+                cardContent.addEventListener('input', function() {
+                    document.getElementById('card-char-count').textContent = this.value.length;
+                });
+            }
+            const msgAnon = document.getElementById('msg-anonymous');
+            if (msgAnon) {
+                msgAnon.addEventListener('change', function() {
+                    document.getElementById('msg-name').disabled = this.checked;
+                    if (this.checked) document.getElementById('msg-name').classList.add('opacity-50');
+                    else document.getElementById('msg-name').classList.remove('opacity-50');
+                });
+            }
+            const cardAnon = document.getElementById('card-anonymous');
+            if (cardAnon) {
+                cardAnon.addEventListener('change', function() {
+                    document.getElementById('card-sender').disabled = this.checked;
+                    if (this.checked) document.getElementById('card-sender').classList.add('opacity-50');
+                    else document.getElementById('card-sender').classList.remove('opacity-50');
+                });
+            }
+            document.getElementById('blessing-modal')?.addEventListener('click', function(e) {
+                if (e.target === this) closeBlessingModal();
+            });
+            document.getElementById('share-modal')?.addEventListener('click', function(e) {
+                if (e.target === this) closeShareModal();
+            });
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    closeBlessingModal();
+                    closeShareModal();
+                }
+            });
+        });
+
+        const _oldLoadCollabInfo = loadCollabInfo;
+        loadCollabInfo = async function() {
+            await _oldLoadCollabInfo();
+            setTimeout(loadInteractiveSection, 200);
+        };
 
         if (memoryId) {
             loadMemory();

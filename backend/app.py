@@ -8,7 +8,8 @@ import string
 import random
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, abort, url_for
+from flask import Flask, request, jsonify, send_from_directory, abort, url_for, redirect
+from urllib.parse import quote as encodeURIComponent
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -389,6 +390,16 @@ class Memory(db.Model):
         can_view = base_can_view and not is_locked
 
         collab_count = Collaborator.query.filter_by(memory_id=self.id, status='active').count()
+        likes_count = MemoryLike.query.filter_by(memory_id=self.id).count()
+        favorites_count = MemoryFavorite.query.filter_by(memory_id=self.id).count()
+        messages_count = GuestMessage.query.filter_by(memory_id=self.id, approved=True, parent_id=None).count()
+        blessing_cards_count = BlessingCard.query.filter_by(memory_id=self.id, approved=True).count()
+
+        viewer_liked = False
+        viewer_favorited = False
+        if viewer and viewer.is_authenticated:
+            viewer_liked = MemoryLike.query.filter_by(memory_id=self.id, user_id=viewer.id).first() is not None
+            viewer_favorited = MemoryFavorite.query.filter_by(memory_id=self.id, user_id=viewer.id).first() is not None
 
         result = {
             'id': self.id,
@@ -419,7 +430,13 @@ class Memory(db.Model):
             'author_id': self.user_id,
             'view_url': f'{app.config["MEMORY_VIEW_URL"]}?id={self.id}',
             'full_view_url': build_view_url(self.id),
-            'collaborator_count': collab_count
+            'collaborator_count': collab_count,
+            'likes_count': likes_count,
+            'favorites_count': favorites_count,
+            'messages_count': messages_count,
+            'blessing_cards_count': blessing_cards_count,
+            'viewer_liked': viewer_liked,
+            'viewer_favorited': viewer_favorited
         }
 
         if not is_locked and can_view:
@@ -594,6 +611,204 @@ class MemoryComment(db.Model):
             'content': self.content,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
         }
+
+class GuestMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    guest_name = db.Column(db.String(50), nullable=False)
+    content = db.Column(db.String(1000), nullable=False)
+    message_type = db.Column(db.String(20), default='message', nullable=False)
+    is_anonymous = db.Column(db.Boolean, default=False, nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('guest_message.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    approved = db.Column(db.Boolean, default=True, nullable=False)
+
+    user = db.relationship('User', backref='guest_messages')
+    parent = db.relationship('GuestMessage', remote_side=[id], backref='replies')
+    memory = db.relationship('Memory', backref='guest_messages')
+
+    def to_dict(self, include_replies=True):
+        result = {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'guest_name': '匿名访客' if self.is_anonymous else self.guest_name,
+            'content': self.content,
+            'message_type': self.message_type,
+            'is_anonymous': self.is_anonymous,
+            'parent_id': self.parent_id,
+            'approved': self.approved,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+        if include_replies and self.replies:
+            result['replies'] = [r.to_dict(include_replies=False) for r in self.replies if r.approved]
+        return result
+
+class BlessingCard(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    sender_name = db.Column(db.String(50), nullable=False)
+    recipient_name = db.Column(db.String(50), nullable=True)
+    content = db.Column(db.String(1000), nullable=False)
+    card_template = db.Column(db.String(50), default='classic', nullable=False)
+    card_color = db.Column(db.String(20), default='warm', nullable=False)
+    is_anonymous = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    approved = db.Column(db.Boolean, default=True, nullable=False)
+
+    user = db.relationship('User', backref='blessing_cards')
+    memory = db.relationship('Memory', backref='blessing_cards')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'sender_name': '匿名访客' if self.is_anonymous else self.sender_name,
+            'recipient_name': self.recipient_name,
+            'content': self.content,
+            'card_template': self.card_template,
+            'card_color': self.card_color,
+            'is_anonymous': self.is_anonymous,
+            'approved': self.approved,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+class AnonymousResponse(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    target_type = db.Column(db.String(20), nullable=False)
+    target_id = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    response_type = db.Column(db.String(20), default='emoji', nullable=False)
+    content = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='anonymous_responses')
+    memory = db.relationship('Memory', backref='anonymous_responses')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'target_type': self.target_type,
+            'target_id': self.target_id,
+            'user_id': self.user_id,
+            'response_type': self.response_type,
+            'content': self.content,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+class MemoryLike(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    session_id = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('memory_id', 'user_id', name='_memory_user_like_uc'),
+    )
+
+    user = db.relationship('User', backref='memory_likes')
+    memory = db.relationship('Memory', backref='likes')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+class MemoryFavorite(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('memory_id', 'user_id', name='_memory_user_favorite_uc'),
+    )
+
+    user = db.relationship('User', backref='favorites')
+    memory = db.relationship('Memory', backref='favorited_by')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'memory_id': self.memory_id,
+            'user_id': self.user_id,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None
+        }
+
+class ShortLink(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    short_code = db.Column(db.String(12), unique=True, nullable=False)
+    memory_id = db.Column(db.String(36), db.ForeignKey('memory.id'), nullable=False)
+    original_url = db.Column(db.String(500), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    click_count = db.Column(db.Integer, default=0, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='short_links')
+    memory = db.relationship('Memory', backref='short_links')
+
+    def get_short_url(self):
+        base_url = get_base_url()
+        return f"{base_url}/s/{self.short_code}"
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'short_code': self.short_code,
+            'memory_id': self.memory_id,
+            'original_url': self.original_url,
+            'created_by': self.created_by,
+            'click_count': self.click_count,
+            'expires_at': self.expires_at.strftime('%Y-%m-%d %H:%M') if self.expires_at else None,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M') if self.created_at else None,
+            'short_url': self.get_short_url()
+        }
+
+CARD_TEMPLATES = ['classic', 'elegant', 'warm', 'romantic', 'festive', 'memorial']
+CARD_COLORS = ['warm', 'cool', 'rose', 'gold', 'sky', 'earth']
+EMOJI_RESPONSES = ['❤️', '😭', '😊', '🙏', '🌹', '🔥', '✨', '💪', '🎉', '🤗']
+
+def generate_short_code(length=8):
+    chars = string.ascii_letters + string.digits
+    while True:
+        code = ''.join(random.choices(chars, k=length))
+        if not ShortLink.query.filter_by(short_code=code).first():
+            return code
+
+def has_message_access(memory_id, user=None, user_lat=None, user_lon=None):
+    memory = Memory.query.get(memory_id)
+    if not memory:
+        return False, '记忆不存在'
+    if memory.is_locked():
+        return False, '该记忆已锁定，解锁后可留言'
+    if memory.visibility == VISIBILITY_PUBLIC:
+        if memory.has_geo_lock():
+            unlocked, msg = memory.check_geo_unlock(user_lat, user_lon)
+            if not unlocked:
+                return False, msg or '需要在指定位置才能留言'
+        if memory.has_group_lock():
+            viewer_id = user.id if user and user.is_authenticated else None
+            unlocked, msg, _ = memory.check_group_unlock(viewer_id)
+            if not unlocked and not (user and user.is_authenticated and user.id == memory.user_id):
+                return False, '需要完成多人联合解锁后才能留言'
+        return True, None
+    if user and user.is_authenticated:
+        if user.id == memory.user_id:
+            return True, None
+        role = get_user_role(memory_id, user.id)
+        if role is not None:
+            return True, None
+    return False, '您没有权限留言，请先登录并获取访问权限'
 
 def log_collab_action(memory_id, action, detail='', user_id=None):
     try:
@@ -2189,6 +2404,777 @@ def get_my_role(memory_id):
         'can_comment': can_comment(memory_id, current_user.id)
     })
 
+@app.route('/api/memories/<memory_id>/guest-messages', methods=['GET'])
+def get_guest_messages(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    viewer = current_user if current_user.is_authenticated else None
+    if not memory.can_view(viewer):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': '请先登录'}), 401
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限查看'}), 403
+
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 100)
+
+    query = GuestMessage.query.filter_by(
+        memory_id=memory_id, approved=True, parent_id=None
+    ).order_by(GuestMessage.created_at.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'success': True,
+        'messages': [m.to_dict() for m in pagination.items],
+        'total': pagination.total,
+        'page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next
+    })
+
+@app.route('/api/memories/<memory_id>/guest-messages', methods=['POST'])
+def create_guest_message(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    if user_lat is not None:
+        try:
+            user_lat = float(user_lat)
+        except (ValueError, TypeError):
+            user_lat = None
+    if user_lon is not None:
+        try:
+            user_lon = float(user_lon)
+        except (ValueError, TypeError):
+            user_lon = None
+
+    viewer = current_user if current_user.is_authenticated else None
+    can_access, access_msg = has_message_access(memory_id, viewer, user_lat, user_lon)
+    if not can_access:
+        return jsonify({'success': False, 'message': access_msg or '您没有权限留言'}), 403
+
+    content = data.get('content', '').strip()
+    guest_name = data.get('guest_name', '').strip()
+    message_type = data.get('message_type', 'message')
+    is_anonymous = data.get('is_anonymous', False)
+    parent_id = data.get('parent_id', None)
+
+    if not content:
+        return jsonify({'success': False, 'message': '留言内容不能为空'}), 400
+    if len(content) > 1000:
+        return jsonify({'success': False, 'message': '留言内容不能超过1000字'}), 400
+    if not is_anonymous and not guest_name:
+        if current_user.is_authenticated:
+            guest_name = current_user.username
+        else:
+            return jsonify({'success': False, 'message': '请填写您的昵称或选择匿名留言'}), 400
+    if guest_name and len(guest_name) > 50:
+        return jsonify({'success': False, 'message': '昵称不能超过50个字符'}), 400
+    if message_type not in ['message', 'blessing', 'memory']:
+        message_type = 'message'
+    if parent_id is not None:
+        parent = GuestMessage.query.filter_by(id=parent_id, memory_id=memory_id).first()
+        if not parent:
+            return jsonify({'success': False, 'message': '回复的留言不存在'}), 400
+        if parent.parent_id is not None:
+            return jsonify({'success': False, 'message': '不能对回复进行回复'}), 400
+
+    try:
+        msg = GuestMessage(
+            memory_id=memory_id,
+            user_id=current_user.id if current_user.is_authenticated else None,
+            guest_name=guest_name or ('用户' + str(random.randint(1000, 9999))),
+            content=content,
+            message_type=message_type,
+            is_anonymous=is_anonymous,
+            parent_id=parent_id,
+            approved=True
+        )
+        db.session.add(msg)
+        db.session.commit()
+        log_operation('guest_message', f'访客留言: {content[:50]}', memory_id=memory_id)
+        return jsonify({'success': True, 'message': msg.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating guest message: {str(e)}")
+        return jsonify({'success': False, 'message': '留言失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/blessing-cards', methods=['GET'])
+def get_blessing_cards(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    viewer = current_user if current_user.is_authenticated else None
+    if not memory.can_view(viewer):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': '请先登录'}), 401
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限查看'}), 403
+
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 12, type=int), 50)
+
+    query = BlessingCard.query.filter_by(
+        memory_id=memory_id, approved=True
+    ).order_by(BlessingCard.created_at.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'success': True,
+        'cards': [c.to_dict() for c in pagination.items],
+        'total': pagination.total,
+        'page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next,
+        'templates': CARD_TEMPLATES,
+        'colors': CARD_COLORS
+    })
+
+@app.route('/api/memories/<memory_id>/blessing-cards', methods=['POST'])
+def create_blessing_card(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    if user_lat is not None:
+        try:
+            user_lat = float(user_lat)
+        except (ValueError, TypeError):
+            user_lat = None
+    if user_lon is not None:
+        try:
+            user_lon = float(user_lon)
+        except (ValueError, TypeError):
+            user_lon = None
+
+    viewer = current_user if current_user.is_authenticated else None
+    can_access, access_msg = has_message_access(memory_id, viewer, user_lat, user_lon)
+    if not can_access:
+        return jsonify({'success': False, 'message': access_msg or '您没有权限发送祝福卡片'}), 403
+
+    content = data.get('content', '').strip()
+    sender_name = data.get('sender_name', '').strip()
+    recipient_name = data.get('recipient_name', '').strip()
+    card_template = data.get('card_template', 'classic')
+    card_color = data.get('card_color', 'warm')
+    is_anonymous = data.get('is_anonymous', False)
+
+    if not content:
+        return jsonify({'success': False, 'message': '祝福内容不能为空'}), 400
+    if len(content) > 1000:
+        return jsonify({'success': False, 'message': '祝福内容不能超过1000字'}), 400
+    if not is_anonymous and not sender_name:
+        if current_user.is_authenticated:
+            sender_name = current_user.username
+        else:
+            return jsonify({'success': False, 'message': '请填写您的昵称或选择匿名发送'}), 400
+    if sender_name and len(sender_name) > 50:
+        return jsonify({'success': False, 'message': '昵称不能超过50个字符'}), 400
+    if recipient_name and len(recipient_name) > 50:
+        return jsonify({'success': False, 'message': '收件人昵称不能超过50个字符'}), 400
+    if card_template not in CARD_TEMPLATES:
+        card_template = 'classic'
+    if card_color not in CARD_COLORS:
+        card_color = 'warm'
+
+    try:
+        card = BlessingCard(
+            memory_id=memory_id,
+            user_id=current_user.id if current_user.is_authenticated else None,
+            sender_name=sender_name or ('访客' + str(random.randint(1000, 9999))),
+            recipient_name=recipient_name or None,
+            content=content,
+            card_template=card_template,
+            card_color=card_color,
+            is_anonymous=is_anonymous,
+            approved=True
+        )
+        db.session.add(card)
+        db.session.commit()
+        log_operation('blessing_card', f'发送祝福卡片: {content[:50]}', memory_id=memory_id)
+        return jsonify({'success': True, 'card': card.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating blessing card: {str(e)}")
+        return jsonify({'success': False, 'message': '发送祝福卡片失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/anonymous-responses', methods=['GET'])
+def get_anonymous_responses(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    target_type = request.args.get('target_type', 'all')
+    target_id = request.args.get('target_id', None, type=int)
+
+    query = AnonymousResponse.query.filter_by(memory_id=memory_id)
+    if target_type != 'all':
+        query = query.filter_by(target_type=target_type)
+    if target_id is not None:
+        query = query.filter_by(target_id=target_id)
+
+    responses = query.order_by(AnonymousResponse.created_at.desc()).all()
+
+    result = {}
+    for r in responses:
+        key = f"{r.target_type}_{r.target_id}"
+        if key not in result:
+            result[key] = {}
+        if r.response_type == 'emoji':
+            if r.content not in result[key]:
+                result[key][r.content] = 0
+            result[key][r.content] += 1
+
+    return jsonify({
+        'success': True,
+        'responses': [r.to_dict() for r in responses],
+        'summary': result,
+        'available_emojis': EMOJI_RESPONSES
+    })
+
+@app.route('/api/memories/<memory_id>/anonymous-responses', methods=['POST'])
+def create_anonymous_response(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    data = request.json or {}
+    user_lat = data.get('lat', None)
+    user_lon = data.get('lon', None)
+    if user_lat is not None:
+        try:
+            user_lat = float(user_lat)
+        except (ValueError, TypeError):
+            user_lat = None
+    if user_lon is not None:
+        try:
+            user_lon = float(user_lon)
+        except (ValueError, TypeError):
+            user_lon = None
+
+    viewer = current_user if current_user.is_authenticated else None
+    can_access, access_msg = has_message_access(memory_id, viewer, user_lat, user_lon)
+    if not can_access:
+        return jsonify({'success': False, 'message': access_msg or '您没有权限回应'}), 403
+
+    target_type = data.get('target_type', 'message')
+    target_id = data.get('target_id')
+    response_type = data.get('response_type', 'emoji')
+    content = data.get('content', '').strip()
+
+    if target_type not in ['message', 'card', 'memory']:
+        target_type = 'message'
+    if target_id is None:
+        return jsonify({'success': False, 'message': '请指定回应的目标'}), 400
+    if response_type not in ['emoji', 'text']:
+        response_type = 'emoji'
+    if response_type == 'emoji' and content not in EMOJI_RESPONSES:
+        return jsonify({'success': False, 'message': '无效的表情回应'}), 400
+    if response_type == 'text':
+        if not content:
+            return jsonify({'success': False, 'message': '回应内容不能为空'}), 400
+        if len(content) > 200:
+            return jsonify({'success': False, 'message': '回应内容不能超过200字'}), 400
+
+    try:
+        response = AnonymousResponse(
+            memory_id=memory_id,
+            target_type=target_type,
+            target_id=target_id,
+            user_id=current_user.id if current_user.is_authenticated else None,
+            response_type=response_type,
+            content=content
+        )
+        db.session.add(response)
+        db.session.commit()
+        return jsonify({'success': True, 'response': response.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating anonymous response: {str(e)}")
+        return jsonify({'success': False, 'message': '回应失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/like', methods=['POST'])
+def toggle_like(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    viewer = current_user if current_user.is_authenticated else None
+    if not memory.can_view(viewer):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': '请先登录'}), 401
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限操作'}), 403
+
+    user_id = current_user.id if current_user.is_authenticated else None
+    session_id = None
+    if not user_id:
+        session_id = request.cookies.get('like_session_id')
+        if not session_id:
+            session_id = str(uuid.uuid4())
+
+    existing_like = None
+    if user_id:
+        existing_like = MemoryLike.query.filter_by(memory_id=memory_id, user_id=user_id).first()
+    else:
+        existing_like = MemoryLike.query.filter_by(memory_id=memory_id, session_id=session_id).first()
+
+    if existing_like:
+        db.session.delete(existing_like)
+        liked = False
+        action = '取消点赞'
+    else:
+        new_like = MemoryLike(
+            memory_id=memory_id,
+            user_id=user_id,
+            session_id=session_id
+        )
+        db.session.add(new_like)
+        liked = True
+        action = '点赞'
+
+    try:
+        db.session.commit()
+        likes_count = MemoryLike.query.filter_by(memory_id=memory_id).count()
+        log_operation('like_toggle', f'{action} 记忆', memory_id=memory_id)
+        resp = jsonify({
+            'success': True,
+            'liked': liked,
+            'likes_count': likes_count
+        })
+        if not user_id and not request.cookies.get('like_session_id'):
+            resp.set_cookie('like_session_id', session_id, max_age=31536000, httponly=True, samesite='Lax')
+        return resp
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error toggling like: {str(e)}")
+        return jsonify({'success': False, 'message': '操作失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/like-status', methods=['GET'])
+def get_like_status(memory_id):
+    Memory.query.get_or_404(memory_id)
+    user_id = current_user.id if current_user.is_authenticated else None
+    session_id = request.cookies.get('like_session_id')
+
+    liked = False
+    if user_id:
+        liked = MemoryLike.query.filter_by(memory_id=memory_id, user_id=user_id).first() is not None
+    elif session_id:
+        liked = MemoryLike.query.filter_by(memory_id=memory_id, session_id=session_id).first() is not None
+
+    likes_count = MemoryLike.query.filter_by(memory_id=memory_id).count()
+    return jsonify({
+        'success': True,
+        'liked': liked,
+        'likes_count': likes_count
+    })
+
+@app.route('/api/memories/<memory_id>/favorite', methods=['POST'])
+@login_required
+def toggle_favorite(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if not memory.can_view(current_user):
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限操作'}), 403
+
+    existing_fav = MemoryFavorite.query.filter_by(
+        memory_id=memory_id, user_id=current_user.id
+    ).first()
+
+    if existing_fav:
+        db.session.delete(existing_fav)
+        favorited = False
+        action = '取消收藏'
+    else:
+        new_fav = MemoryFavorite(
+            memory_id=memory_id,
+            user_id=current_user.id
+        )
+        db.session.add(new_fav)
+        favorited = True
+        action = '收藏'
+
+    try:
+        db.session.commit()
+        favorites_count = MemoryFavorite.query.filter_by(memory_id=memory_id).count()
+        log_operation('favorite_toggle', f'{action} 记忆', memory_id=memory_id)
+        return jsonify({
+            'success': True,
+            'favorited': favorited,
+            'favorites_count': favorites_count
+        })
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error toggling favorite: {str(e)}")
+        return jsonify({'success': False, 'message': '操作失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/favorite-status', methods=['GET'])
+@login_required
+def get_favorite_status(memory_id):
+    Memory.query.get_or_404(memory_id)
+    favorited = MemoryFavorite.query.filter_by(
+        memory_id=memory_id, user_id=current_user.id
+    ).first() is not None
+    favorites_count = MemoryFavorite.query.filter_by(memory_id=memory_id).count()
+    return jsonify({
+        'success': True,
+        'favorited': favorited,
+        'favorites_count': favorites_count
+    })
+
+@app.route('/api/user/favorites', methods=['GET'])
+@login_required
+def get_user_favorites():
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 100)
+
+    query = MemoryFavorite.query.filter_by(
+        user_id=current_user.id
+    ).order_by(MemoryFavorite.created_at.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    result = []
+    for fav in pagination.items:
+        memory = Memory.query.get(fav.memory_id)
+        if memory:
+            d = memory.to_dict(viewer=current_user)
+            d['favorited_at'] = fav.created_at.strftime('%Y-%m-%d %H:%M') if fav.created_at else None
+            result.append(d)
+
+    return jsonify({
+        'success': True,
+        'favorites': result,
+        'total': pagination.total,
+        'page': page,
+        'per_page': per_page,
+        'has_next': pagination.has_next
+    })
+
+@app.route('/api/memories/<memory_id>/short-link', methods=['POST'])
+def create_short_link(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    viewer = current_user if current_user.is_authenticated else None
+    if memory.visibility != VISIBILITY_PUBLIC and not memory.can_view(viewer):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': '请先登录'}), 401
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限生成分享链接'}), 403
+
+    data = request.json or {}
+    custom_code = data.get('custom_code', '').strip()
+    expires_days = data.get('expires_days', None)
+    if expires_days is not None:
+        try:
+            expires_days = int(expires_days)
+        except (ValueError, TypeError):
+            expires_days = None
+
+    if custom_code:
+        if len(custom_code) < 4 or len(custom_code) > 12:
+            return jsonify({'success': False, 'message': '自定义短码长度需在4-12个字符之间'}), 400
+        if not re.match(r'^[a-zA-Z0-9]+$', custom_code):
+            return jsonify({'success': False, 'message': '自定义短码只能包含字母和数字'}), 400
+        if ShortLink.query.filter_by(short_code=custom_code).first():
+            return jsonify({'success': False, 'message': '该自定义短码已被使用'}), 400
+        short_code = custom_code
+    else:
+        short_code = generate_short_code()
+
+    original_url = build_view_url(memory_id)
+
+    expires_at = None
+    if expires_days and expires_days > 0:
+        from datetime import timedelta
+        expires_at = datetime.utcnow() + timedelta(days=min(expires_days, 365))
+
+    try:
+        short_link = ShortLink(
+            short_code=short_code,
+            memory_id=memory_id,
+            original_url=original_url,
+            created_by=current_user.id if current_user.is_authenticated else None,
+            expires_at=expires_at
+        )
+        db.session.add(short_link)
+        db.session.commit()
+        log_operation('create_short_link', f'生成短链接: {short_code}', memory_id=memory_id)
+        return jsonify({'success': True, 'short_link': short_link.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating short link: {str(e)}")
+        return jsonify({'success': False, 'message': '生成短链接失败，请重试'}), 500
+
+@app.route('/api/memories/<memory_id>/short-links', methods=['GET'])
+def list_short_links(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    if current_user.is_authenticated and current_user.id != memory.user_id:
+        role = get_user_role(memory_id, current_user.id)
+        if role != COLLAB_ROLE_OWNER:
+            return jsonify({'error': 'Forbidden'}), 403
+    elif not current_user.is_authenticated or current_user.id != memory.user_id:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    links = ShortLink.query.filter_by(memory_id=memory_id).order_by(
+        ShortLink.created_at.desc()
+    ).all()
+    return jsonify({'success': True, 'short_links': [l.to_dict() for l in links]})
+
+@app.route('/s/<short_code>')
+def redirect_short_link(short_code):
+    link = ShortLink.query.filter_by(short_code=short_code).first()
+    if not link:
+        return send_from_directory(_FRONTEND_DIR, 'index.html')
+
+    if link.expires_at and link.expires_at < datetime.utcnow():
+        return send_from_directory(_FRONTEND_DIR, 'index.html')
+
+    try:
+        link.click_count += 1
+        db.session.commit()
+    except Exception:
+        pass
+
+    memory = Memory.query.get(link.memory_id)
+    if memory:
+        if memory.visibility == VISIBILITY_PRIVATE and not current_user.is_authenticated:
+            current_url = encodeURIComponent(link.original_url) if link.original_url else ''
+            return redirect(f'/login.html?redirect={current_url}')
+        log_operation('short_link_click', f'点击短链接: {short_code}', memory_id=link.memory_id)
+
+    return redirect(link.original_url)
+
+@app.route('/api/memories/<memory_id>/share-poster', methods=['GET'])
+def generate_share_poster(memory_id):
+    memory = Memory.query.get_or_404(memory_id)
+    viewer = current_user if current_user.is_authenticated else None
+    if memory.visibility != VISIBILITY_PUBLIC and not memory.can_view(viewer):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'auth_required', 'message': '请先登录'}), 401
+        return jsonify({'error': 'Forbidden', 'message': '您没有权限生成海报'}), 403
+
+    style = request.args.get('style', 'elegant')
+    include_qr = request.args.get('include_qr', 'true').lower() == 'true'
+    width = request.args.get('width', 750, type=int)
+    width = max(375, min(width, 1500))
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+
+        height = int(width * 1.6)
+        poster = Image.new('RGB', (width, height), '#0f172a')
+        draw = ImageDraw.Draw(poster)
+
+        if style == 'elegant':
+            bg_color = '#0f172a'
+            primary_color = '#38bdf8'
+            secondary_color = '#f472b6'
+            text_color = '#f8fafc'
+            subtext_color = '#94a3b8'
+        elif style == 'warm':
+            bg_color = '#1c1917'
+            primary_color = '#f97316'
+            secondary_color = '#fbbf24'
+            text_color = '#fafaf9'
+            subtext_color = '#a8a29e'
+        elif style == 'romantic':
+            bg_color = '#1e1b2e'
+            primary_color = '#ec4899'
+            secondary_color = '#a855f7'
+            text_color = '#fdf4ff'
+            subtext_color = '#c4b5fd'
+        elif style == 'memorial':
+            bg_color = '#0a0a0a'
+            primary_color = '#d4af37'
+            secondary_color = '#c0c0c0'
+            text_color = '#ffffff'
+            subtext_color = '#a0a0a0'
+        else:
+            style = 'elegant'
+            bg_color = '#0f172a'
+            primary_color = '#38bdf8'
+            secondary_color = '#f472b6'
+            text_color = '#f8fafc'
+            subtext_color = '#94a3b8'
+
+        draw.rectangle([(0, 0), (width, height)], fill=bg_color)
+
+        margin = int(width * 0.06)
+        content_width = width - 2 * margin
+        y = margin
+
+        try:
+            if memory.media_filename:
+                media_path = os.path.join(app.config['UPLOAD_FOLDER'], memory.media_filename)
+                if os.path.exists(media_path) and memory.media_type == 'image':
+                    try:
+                        img = Image.open(media_path).convert('RGB')
+                        img_ratio = img.width / img.height
+                        target_h = int(content_width * 0.6)
+                        target_w = int(target_h * img_ratio)
+                        if target_w > content_width:
+                            target_w = content_width
+                            target_h = int(target_w / img_ratio)
+                        img = img.resize((target_w, target_h), Image.LANCZOS)
+                        x = (width - target_w) // 2
+                        poster.paste(img, (x, y))
+                        y += target_h + int(height * 0.03)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        border_w = 3
+        draw.line([(margin, y), (width - margin, y)], fill=primary_color, width=border_w)
+        y += int(height * 0.02)
+
+        title_font_size = int(width * 0.05)
+        try:
+            title_font = ImageFont.truetype("arial.ttf", title_font_size)
+        except:
+            title_font = ImageFont.load_default()
+
+        title = memory.title
+        title_chars = []
+        for char in title:
+            bbox = draw.textbbox((0, 0), char, font=title_font)
+            char_w = bbox[2] - bbox[0]
+            title_chars.append((char, char_w))
+
+        lines = []
+        current_line = ''
+        current_w = 0
+        for char, char_w in title_chars:
+            if current_w + char_w > content_width and current_line:
+                lines.append(current_line)
+                current_line = char
+                current_w = char_w
+            else:
+                current_line += char
+                current_w += char_w
+        if current_line:
+            lines.append(current_line)
+
+        for line in lines:
+            draw.text((margin, y), line, fill=text_color, font=title_font)
+            y += title_font_size + 4
+        y += int(height * 0.02)
+
+        author_font_size = int(width * 0.028)
+        try:
+            author_font = ImageFont.truetype("arial.ttf", author_font_size)
+        except:
+            author_font = ImageFont.load_default()
+
+        author_text = f"By {memory.author}  ·  {memory.created_at.strftime('%Y-%m-%d')}"
+        draw.text((margin, y), author_text, fill=subtext_color, font=author_font)
+        y += author_font_size + int(height * 0.03)
+
+        if memory.text_content and not memory.is_locked():
+            content_font_size = int(width * 0.03)
+            try:
+                content_font = ImageFont.truetype("arial.ttf", content_font_size)
+            except:
+                content_font = ImageFont.load_default()
+
+            preview_text = memory.text_content[:300]
+            if len(memory.text_content) > 300:
+                preview_text += '...'
+
+            content_chars = []
+            for char in preview_text:
+                bbox = draw.textbbox((0, 0), char, font=content_font)
+                char_w = bbox[2] - bbox[0]
+                content_chars.append((char, char_w))
+
+            max_content_lines = 6
+            content_lines = []
+            current_line = ''
+            current_w = 0
+            for char, char_w in content_chars:
+                if char == '\n' or (current_w + char_w > content_width and current_line):
+                    if char != '\n':
+                        content_lines.append(current_line)
+                        current_line = char
+                        current_w = char_w
+                    else:
+                        content_lines.append(current_line)
+                        current_line = ''
+                        current_w = 0
+                    if len(content_lines) >= max_content_lines:
+                        break
+                else:
+                    current_line += char
+                    current_w += char_w
+            if current_line and len(content_lines) < max_content_lines:
+                content_lines.append(current_line)
+
+            for line in content_lines:
+                draw.text((margin, y), line, fill=text_color, font=content_font)
+                y += content_font_size + 4
+            y += int(height * 0.03)
+
+        if include_qr and memory.qr_filename:
+            qr_path = os.path.join(app.config['QR_FOLDER'], memory.qr_filename)
+            if os.path.exists(qr_path):
+                try:
+                    qr_img = Image.open(qr_path).convert('RGBA')
+                    qr_size = int(content_width * 0.35)
+                    qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+                    qr_x = (width - qr_size) // 2
+
+                    qr_bg = Image.new('RGB', (qr_size + 20, qr_size + 40), '#ffffff')
+                    qr_bg_draw = ImageDraw.Draw(qr_bg)
+                    qr_bg.paste(qr_img, (10, 10), qr_img)
+
+                    scan_font_size = int(width * 0.022)
+                    try:
+                        scan_font = ImageFont.truetype("arial.ttf", scan_font_size)
+                    except:
+                        scan_font = ImageFont.load_default()
+                    scan_text = "扫码查看记忆"
+                    text_bbox = qr_bg_draw.textbbox((0, 0), scan_text, font=scan_font)
+                    text_w = text_bbox[2] - text_bbox[0]
+                    qr_bg_draw.text(((qr_size + 20 - text_w) // 2, qr_size + 15), scan_text, fill='#1e293b', font=scan_font)
+
+                    poster.paste(qr_bg, (qr_x - 10, y))
+                    y += qr_size + 50
+                except Exception:
+                    pass
+
+        y += int(height * 0.02)
+        draw.line([(margin, y), (width - margin, y)], fill=secondary_color, width=border_w)
+        y += int(height * 0.02)
+
+        footer_font_size = int(width * 0.022)
+        try:
+            footer_font = ImageFont.truetype("arial.ttf", footer_font_size)
+        except:
+            footer_font = ImageFont.load_default()
+
+        stats = []
+        if hasattr(memory, 'likes'):
+            likes_count = MemoryLike.query.filter_by(memory_id=memory_id).count()
+            stats.append(f"❤️ {likes_count}")
+        if hasattr(memory, 'favorited_by'):
+            favs_count = MemoryFavorite.query.filter_by(memory_id=memory_id).count()
+            stats.append(f"⭐ {favs_count}")
+        stats.append(f"MEMORY QR")
+
+        stats_text = '    '.join(stats)
+        stats_bbox = draw.textbbox((0, 0), stats_text, font=footer_font)
+        stats_w = stats_bbox[2] - stats_bbox[0]
+        draw.text(((width - stats_w) // 2, y), stats_text, fill=secondary_color, font=footer_font)
+
+        poster_filename = f"poster_{memory_id}_{style}_{width}.png"
+        poster_path = os.path.join(app.config['QR_FOLDER'], poster_filename)
+        poster.save(poster_path, 'PNG', quality=95)
+
+        poster_url = f'/static/qrcodes/{poster_filename}'
+        log_operation('generate_poster', f'生成分享海报: {style}', memory_id=memory_id)
+
+        return jsonify({
+            'success': True,
+            'poster_url': poster_url,
+            'width': width,
+            'height': height,
+            'style': style,
+            'memory_title': memory.title
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error generating poster: {str(e)}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': '生成海报失败，请重试'}), 500
+
 def serve_frontend_file(filepath):
     full_path = os.path.join(_FRONTEND_DIR, filepath)
     if os.path.exists(full_path):
@@ -2231,7 +3217,7 @@ def init_db():
     inspector = inspect(db.engine)
 
     existing_tables = inspector.get_table_names()
-    for table_name in ['collaborator', 'collaboration_log', 'invitation', 'join_request', 'memory_comment', 'unlock_session', 'unlock_participant']:
+    for table_name in ['collaborator', 'collaboration_log', 'invitation', 'join_request', 'memory_comment', 'unlock_session', 'unlock_participant', 'guest_message', 'blessing_card', 'anonymous_response', 'memory_like', 'memory_favorite', 'short_link']:
         if table_name not in existing_tables:
             app.logger.info(f"Table '{table_name}' will be created by db.create_all()")
 
